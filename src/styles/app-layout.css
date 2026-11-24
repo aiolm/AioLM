@@ -1,8 +1,6 @@
 /* Functional panel geometry. Visual rules live in the shared component system. */
-.app-page-scroll { width: 100%; min-width: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scrollbar-gutter: stable; container: workspace / inline-size; }
+.app-page-scroll { width: 100%; min-width: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; container: workspace / inline-size; }
 .app-page-scroll > :not(.chat-layout):not(.discover-columns) { flex-shrink: 0; }
-/* Keep the same content edge when a page or an inner list starts scrolling. */
-.chat-message-log, .aiolm-navigation, .discover-results, .discover-detail, .projects-list-items, .projects-selection-list, .mcp-server-list, .app-activity-content, .api-model-list, .model-settings-body, .model-settings-nav { scrollbar-gutter: stable; }
 /* Form columns use their own available width, including inside detail panes. */
 .app-form-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); }
 .app-master-detail, .discover-columns { grid-template-columns: minmax(0,1fr); }

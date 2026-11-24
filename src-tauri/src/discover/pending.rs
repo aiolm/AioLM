@@ -17,6 +17,8 @@ use std::path::{Path, PathBuf};
 const MAX_ENTRIES: usize = 32;
 /// The list is a few dozen short records; anything larger is not one.
 const MAX_STORE_BYTES: u64 = 4 * 1024 * 1024;
+/// Serializes store read-modify-write cycles across concurrent downloads.
+static STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct PendingFile {
@@ -178,6 +180,7 @@ fn bytes_on_disk(file: &PendingFile) -> u64 {
 }
 
 fn list_in(store: &Path) -> Vec<PendingDownload> {
+    let _guard = STORE_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
     let mut entries = read_store(store);
     for entry in &mut entries {
         entry.received = entry.files.iter().map(bytes_on_disk).sum();
@@ -186,7 +189,13 @@ fn list_in(store: &Path) -> Vec<PendingDownload> {
     entries
 }
 
+fn find_in(store: &Path, id: &str) -> Option<PendingDownload> {
+    let _guard = STORE_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+    read_store(store).into_iter().find(|entry| entry.id == id)
+}
+
 fn remember_in(store: &Path, entry: PendingDownload) -> Result<(), AppError> {
+    let _guard = STORE_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
     let mut entries = read_store(store);
     entries.retain(|existing| {
         existing.id != entry.id
@@ -203,6 +212,7 @@ fn remember_in(store: &Path, entry: PendingDownload) -> Result<(), AppError> {
 }
 
 fn forget_in(store: &Path, id: &str) -> Result<(), AppError> {
+    let _guard = STORE_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
     let mut entries = read_store(store);
     let before = entries.len();
     entries.retain(|entry| entry.id != id);
@@ -236,7 +246,7 @@ fn owned_destination(entry: &PendingDownload, file: &PendingFile) -> Result<Path
 }
 
 fn discard_in(store: &Path, id: &str) -> Result<(), AppError> {
-    if let Some(entry) = read_store(store).into_iter().find(|entry| entry.id == id) {
+    if let Some(entry) = find_in(store, id) {
         // Validate the whole plan before deleting anything, without following
         // linked parents or trusting paths outside this repository's library.
         let destinations = entry
@@ -260,6 +270,11 @@ pub fn list() -> Vec<PendingDownload> {
     default_store()
         .map(|store| list_in(&store))
         .unwrap_or_default()
+}
+
+/// Look up one interrupted download by ID.
+pub fn find(id: &str) -> Option<PendingDownload> {
+    default_store().ok().and_then(|store| find_in(&store, id))
 }
 
 /// Record a download that is starting, replacing an earlier entry for it. A

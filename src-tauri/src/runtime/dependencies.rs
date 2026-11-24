@@ -15,7 +15,12 @@ pub async fn repair_runtime_dependencies(
     let destination = runtime_dir(backend, build)?;
     let backend = backend.to_string();
     tokio::task::spawn_blocking(move || {
-        copy_backend_runtime_dependencies(&backend, &destination, &cancel)
+        copy_backend_runtime_dependencies_with_context(
+            &backend,
+            &destination,
+            &cancel,
+            DependencyPackagingContext::Repair,
+        )
     })
     .await
     .map_err(|error| {
@@ -291,6 +296,14 @@ fn backend_sdk_roots(backend: &str) -> Vec<PathBuf> {
             roots.push(root);
         }
     }
+    #[cfg(windows)]
+    if backend == "rocm" {
+        for root in windows_rocm_sdk_candidates() {
+            if root.is_dir() && !roots.contains(&root) {
+                roots.push(root);
+            }
+        }
+    }
     roots
 }
 
@@ -508,29 +521,166 @@ fn count_files_recursive(directory: &Path) -> usize {
     })
 }
 
-/// Copy redistributable vendor runtime libraries beside the PR binaries. The
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DependencyPackagingContext {
+    Release,
+    PullRequest,
+    Repair,
+    Bundle,
+}
+
+impl DependencyPackagingContext {
+    fn failure_suffix(self) -> &'static str {
+        match self {
+            Self::Release => "the runtime was not activated.",
+            Self::PullRequest => "the PR was not activated.",
+            Self::Repair => "the runtime dependencies were not updated.",
+            Self::Bundle => "the bundle was not exported.",
+        }
+    }
+}
+
+fn version_sort_key(name: &str) -> Vec<u64> {
+    name.split(|ch: char| !ch.is_ascii_digit())
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| part.parse::<u64>().ok())
+        .collect()
+}
+
+pub(super) fn rocm_sdk_candidates_in_bases(bases: &[PathBuf]) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    for base in bases {
+        if base.join("bin").is_dir() || base.join("lib").is_dir() {
+            if !candidates.contains(base) {
+                candidates.push(base.clone());
+            }
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(base) else {
+            continue;
+        };
+        let mut subdirs = entries
+            .flatten()
+            .filter_map(|entry| {
+                let path = entry.path();
+                let metadata = fs::symlink_metadata(&path).ok()?;
+                (metadata.is_dir() && !metadata.file_type().is_symlink()).then(|| {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    (name, path)
+                })
+            })
+            .collect::<Vec<_>>();
+        subdirs.sort_by(|left, right| {
+            version_sort_key(&right.0)
+                .cmp(&version_sort_key(&left.0))
+                .then_with(|| right.0.cmp(&left.0))
+        });
+        for (_, path) in subdirs {
+            if !candidates.contains(&path) {
+                candidates.push(path);
+            }
+        }
+    }
+    candidates
+}
+
+#[cfg(windows)]
+fn windows_rocm_sdk_candidates() -> Vec<PathBuf> {
+    let mut bases = Vec::new();
+    for variable in ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"] {
+        if let Some(root) = std::env::var_os(variable).map(PathBuf::from) {
+            let candidate = root.join("AMD").join("ROCm");
+            if candidate.is_dir() && !bases.contains(&candidate) {
+                bases.push(candidate);
+            }
+        }
+    }
+    if let Some(drive) = std::env::var_os("SystemDrive").map(PathBuf::from) {
+        let mut drive_str = drive.as_os_str().to_os_string();
+        if !drive_str.to_string_lossy().ends_with(['\\', '/']) {
+            drive_str.push("\\");
+        }
+        let candidate = PathBuf::from(drive_str).join("ROCm");
+        if candidate.is_dir() && !bases.contains(&candidate) {
+            bases.push(candidate);
+        }
+    }
+    rocm_sdk_candidates_in_bases(&bases)
+}
+
+fn rocm_sdk_root_can_complete(root: &Path, destination: &Path) -> bool {
+    let lib_dirs = ["bin", "lib", "lib64", "lib/x64"];
+    let has_hip = directory_has_named_runtime_library(destination, "amdhip64")
+        || lib_dirs
+            .iter()
+            .any(|rel| directory_has_named_runtime_library(&root.join(rel), "amdhip64"));
+    let has_hipblas = directory_has_named_runtime_library(destination, "hipblas")
+        || lib_dirs
+            .iter()
+            .any(|rel| directory_has_named_runtime_library(&root.join(rel), "hipblas"));
+    let has_rocblas = directory_has_named_runtime_library(destination, "rocblas")
+        || lib_dirs
+            .iter()
+            .any(|rel| directory_has_named_runtime_library(&root.join(rel), "rocblas"));
+    let has_hipblaslt = directory_has_named_runtime_library(destination, "hipblaslt")
+        || lib_dirs
+            .iter()
+            .any(|rel| directory_has_named_runtime_library(&root.join(rel), "hipblaslt"));
+    let rocblas_data_ok = !has_rocblas
+        || blas_library_has_data(&destination.join("rocblas").join("library"))
+        || ["bin/rocblas/library", "lib/rocblas/library"]
+            .iter()
+            .any(|rel| blas_library_has_data(&root.join(rel)));
+    let hipblaslt_data_ok = !has_hipblaslt
+        || blas_library_has_data(&destination.join("hipblaslt").join("library"))
+        || ["bin/hipblaslt/library", "lib/hipblaslt/library"]
+            .iter()
+            .any(|rel| blas_library_has_data(&root.join(rel)));
+    has_hip && (has_hipblas || has_rocblas) && rocblas_data_ok && hipblaslt_data_ok
+}
+
+/// Copy redistributable vendor runtime libraries beside the runtime binaries. The
 /// build output's backend plugin is not enough: CUDA/HIP shared libraries are
 /// supplied by their SDK and are otherwise found only on the build machine.
 /// The host GPU driver is intentionally excluded because it is supplied by
 /// the operating system and cannot safely be redistributed.
-pub(super) fn copy_backend_runtime_dependencies(
+pub(super) fn copy_backend_runtime_dependencies_with_context(
     backend: &str,
     destination: &Path,
     cancel: &Arc<AtomicBool>,
+    context: DependencyPackagingContext,
 ) -> Result<(), AppError> {
-    copy_backend_runtime_dependencies_from_roots(
+    copy_backend_runtime_dependencies_from_roots_with_context(
         backend,
         destination,
         cancel,
         &backend_sdk_roots(backend),
+        context,
     )
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn copy_backend_runtime_dependencies_from_roots(
     backend: &str,
     destination: &Path,
     cancel: &Arc<AtomicBool>,
     roots: &[PathBuf],
+) -> Result<(), AppError> {
+    copy_backend_runtime_dependencies_from_roots_with_context(
+        backend,
+        destination,
+        cancel,
+        roots,
+        DependencyPackagingContext::PullRequest,
+    )
+}
+
+pub(super) fn copy_backend_runtime_dependencies_from_roots_with_context(
+    backend: &str,
+    destination: &Path,
+    cancel: &Arc<AtomicBool>,
+    roots: &[PathBuf],
+    context: DependencyPackagingContext,
 ) -> Result<(), AppError> {
     if !matches!(backend, "cuda" | "rocm") {
         return Ok(());
@@ -544,12 +694,7 @@ pub(super) fn copy_backend_runtime_dependencies_from_roots(
     let mut found = 0_usize;
     let mut found_data = 0_usize;
     for root in roots {
-        if cfg!(windows)
-            && backend == "rocm"
-            && !["bin", "lib", "lib64", "lib/x64"]
-                .iter()
-                .any(|relative| rocm_runtime_dependencies_complete(&root.join(relative)))
-        {
+        if cfg!(windows) && backend == "rocm" && !rocm_sdk_root_can_complete(root, destination) {
             continue;
         }
         let mut library_directories =
@@ -637,15 +782,23 @@ pub(super) fn copy_backend_runtime_dependencies_from_roots(
             break;
         }
     }
-    if found == 0 {
-        return Err(AppError::unavailable(format!("could not package the {backend} runtime libraries from the installed SDK. Keep the SDK root configured (HIP_PATH/ROCM_PATH for ROCm, CUDA_PATH/CUDA_HOME for CUDA) and retry; the PR was not activated.")));
+    let suffix = context.failure_suffix();
+    if found == 0
+        && !(backend == "rocm" && found_data > 0 && rocm_runtime_dependencies_complete(destination))
+    {
+        if context == DependencyPackagingContext::Release && backend == "rocm" {
+            return Err(AppError::unavailable(format!(
+                "could not package the rocm runtime libraries from the installed SDK. Upstream Windows ROCm release archives omit redistributable HIP/BLAS libraries; install the AMD ROCm/HIP SDK (or set HIP_PATH/ROCM_PATH) and retry, or install the Vulkan backend instead; {suffix}"
+            )));
+        }
+        return Err(AppError::unavailable(format!("could not package the {backend} runtime libraries from the installed SDK. Keep the SDK root configured (HIP_PATH/ROCM_PATH for ROCm, CUDA_PATH/CUDA_HOME for CUDA) and retry; {suffix}")));
     }
     if backend == "rocm" && !rocm_runtime_dependencies_complete(destination) {
         rocm_shared_library_dependencies(destination)?;
-        return Err(AppError::unavailable("could not package the ROCm rocblas/hipblaslt library data needed at runtime. The HIP SDK's bin/rocblas and bin/hipblaslt directories must be available; the PR was not activated."));
+        return Err(AppError::unavailable(format!("could not package the ROCm rocblas/hipblaslt library data needed at runtime. The HIP SDK's bin/rocblas and bin/hipblaslt directories must be available; {suffix}")));
     }
     if backend == "rocm" && found_data == 0 {
-        return Err(AppError::unavailable("the ROCm SDK exposed runtime DLLs but no rocblas/hipblaslt kernel data; the PR was not activated."));
+        return Err(AppError::unavailable(format!("the ROCm SDK exposed runtime DLLs but no rocblas/hipblaslt kernel data; {suffix}")));
     }
     Ok(())
 }

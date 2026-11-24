@@ -56,8 +56,8 @@ export default function McpView({ controller }: { controller: McpController }) {
         <aside className="mcp-servers" aria-labelledby="mcp-servers-title">
           <div className="mcp-servers__header">
             <div className="min-w-0">
-              <h2 id="mcp-servers-title" className="mcp-heading">{t("panel.configuredServers")}</h2>
-              <p className="mcp-hint">{t("ui.mcpConfigured", { count: servers.length })} · {t("ui.mcpEnabledCount", { count: enabledCount })}</p>
+              <h2 id="mcp-servers-title" className="app-section-title">{t("panel.configuredServers")}</h2>
+              <p className="app-section-hint">{t("ui.mcpConfigured", { count: servers.length })} · {t("ui.mcpEnabledCount", { count: enabledCount })}</p>
             </div>
             <button type="button" data-icon="add" onClick={() => requestNavigation(null)} className="app-button app-button--secondary app-button--sm">{t("panel.newItem")}</button>
           </div>

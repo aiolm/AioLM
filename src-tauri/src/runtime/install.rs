@@ -136,10 +136,11 @@ pub async fn install_with(
         let dependency_staging = staging.clone();
         let dependency_cancel = cancel.clone();
         tokio::task::spawn_blocking(move || {
-            copy_backend_runtime_dependencies(
+            copy_backend_runtime_dependencies_with_context(
                 &dependency_backend,
                 &dependency_staging,
                 &dependency_cancel,
+                DependencyPackagingContext::Release,
             )
         })
         .await
@@ -480,7 +481,12 @@ pub async fn install_pr_with(
         let copy_backend = backend.to_string();
         tokio::task::spawn_blocking(move || {
             copy_runtime_tree(&copy_source, &copy_destination, &copy_cancel)?;
-            copy_backend_runtime_dependencies(&copy_backend, &copy_destination, &copy_cancel)?;
+            copy_backend_runtime_dependencies_with_context(
+                &copy_backend,
+                &copy_destination,
+                &copy_cancel,
+                DependencyPackagingContext::PullRequest,
+            )?;
             copy_msvc_runtime_dependencies(&copy_destination, &copy_cancel)?;
             verify_runtime_files(&copy_destination)
         })

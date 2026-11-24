@@ -34,7 +34,7 @@ export function useChatMcpTools() {
   const selectionRevision = useRef(0);
   const pendingRefresh = useRef(false);
   const generation = useRef(0);
-  useEffect(() => () => { generation.current += 1; pendingRefresh.current = false; }, []);
+  useEffect(() => () => { generation.current += 1; pendingRefresh.current = false; setLoadingMcpTools(false); }, []);
   const setSelectedMcpTools = useCallback<Dispatch<SetStateAction<string[]>>>(next => {
     selectionExplicit.current = true;
     selectionRevision.current += 1;

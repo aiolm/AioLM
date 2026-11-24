@@ -11,7 +11,7 @@
 @import "./app-execution.css";
 
 .model-family-icon { display: inline-block; width: 16px; height: 16px; flex-shrink: 0; vertical-align: middle; object-fit: contain; padding: 1px; border-radius: 4px; background: white; margin-inline-end: 6px; }
-:is(.discover-results .flex, .discover-repository .flex, .performance-target-name, .performance-result-model, .model-settings-target, .model-settings-models strong, .api-model-list code) > .model-family-icon { margin-inline-end: 0; }
+:is(.discover-results .flex, .discover-repository .flex, .performance-target-name, .performance-result-model, .model-settings-target, .model-settings-models strong, .api-model-list code, .chat-message-model, .models-model-title, .projects-model-line, .projects-profile-model) > .model-family-icon { margin-inline-end: 0; }
 :root[data-theme="dark"] .model-family-icon { background: var(--ui-surface-muted); border: 1px solid var(--ui-border); }
 
 .model-badges { display: inline-flex; max-width: 100%; flex-wrap: wrap; align-items: center; gap: 4px; margin-block: 4px; vertical-align: middle; }
@@ -34,7 +34,8 @@
 .model-badge-more { color: var(--ui-muted); font-variant-numeric: tabular-nums; }
 .model-badge-summary > .model-badges--measure { position: absolute; inset-block-start: 0; inset-inline-start: 0; inline-size: 100%; flex-wrap: nowrap; overflow: clip; visibility: hidden; pointer-events: none; }
 .model-metadata-details { min-inline-size: 0; margin-block-start: 4px; font-size: var(--ui-text-support); font-weight: 400; }
-.model-metadata-details > summary { cursor: pointer; color: var(--ui-muted); }
+.model-metadata-details > summary { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; color: var(--ui-muted); }
+.model-metadata-details > summary::after { float: none; margin: 0; }
 .model-metadata-details > summary:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
 .model-metadata-fields { display: grid; gap: 6px; max-block-size: min(16rem, 25dvh); overflow-y: auto; margin-block: 8px; }
 .model-metadata-fields > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 3fr); gap: 8px; }

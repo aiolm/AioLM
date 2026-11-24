@@ -45,6 +45,7 @@ export function useChatSkills() {
       window.removeEventListener(PERSONALIZATION_CHANGED_EVENT, onChanged);
       // Responses that arrive after unmount are ignored.
       requestRef.current += 1;
+      setLoading(false);
     };
   }, [refreshSkills]);
 

@@ -82,6 +82,42 @@ pub(crate) async fn provider_register(
     providers::python_env::register_external(provider(&provider_id)?, Path::new(&python)).await
 }
 
+const PROVIDER_PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Cap repetitive same-phase provider installer log events so pip progress bars
+/// never flood WebView2 while always forwarding phase transitions immediately.
+struct ProviderProgressThrottle {
+    interval: std::time::Duration,
+    last_phase: Option<String>,
+    last_emit: Option<std::time::Instant>,
+}
+
+impl ProviderProgressThrottle {
+    fn new(interval: std::time::Duration) -> Self {
+        Self {
+            interval,
+            last_phase: None,
+            last_emit: None,
+        }
+    }
+
+    fn should_emit(&mut self, phase: &str, now: std::time::Instant) -> bool {
+        let phase_changed = self.last_phase.as_deref() != Some(phase);
+        let elapsed = self
+            .last_emit
+            .is_none_or(|previous| now.saturating_duration_since(previous) >= self.interval);
+        if phase_changed || elapsed {
+            if phase_changed {
+                self.last_phase = Some(phase.to_owned());
+            }
+            self.last_emit = Some(now);
+            true
+        } else {
+            false
+        }
+    }
+}
+
 #[tauri::command]
 pub(crate) async fn provider_install(
     state: State<'_, AppState>,
@@ -99,13 +135,16 @@ pub(crate) async fn provider_install(
         }
     }
     state.runtime_cancel.store(false, Ordering::Release);
+    let mut throttle = ProviderProgressThrottle::new(PROVIDER_PROGRESS_INTERVAL);
     providers::python_env::install_managed(
         provider(&provider_id)?,
         python.map(PathBuf::from),
         None,
         state.runtime_cancel.clone(),
         move |progress| {
-            let _ = app.emit("provider-install-progress", progress);
+            if throttle.should_emit(progress.phase, std::time::Instant::now()) {
+                let _ = app.emit("provider-install-progress", progress);
+            }
         },
     )
     .await
@@ -200,13 +239,16 @@ pub(crate) async fn provider_portable_export(
     state.runtime_cancel.store(false, Ordering::Release);
     let cancel = state.runtime_cancel.clone();
     let progress_app = app.clone();
+    let mut throttle = ProviderProgressThrottle::new(PROVIDER_PROGRESS_INTERVAL);
     let info = providers::portable::export_bundle(
         provider,
         &runtime_id,
         &output,
         cancel,
         move |progress| {
-            let _ = progress_app.emit("provider-install-progress", progress);
+            if throttle.should_emit(progress.phase, std::time::Instant::now()) {
+                let _ = progress_app.emit("provider-install-progress", progress);
+            }
         },
     )
     .await?;
@@ -255,8 +297,11 @@ pub(crate) async fn provider_portable_import(
     .ok_or_else(|| AppError::cancelled("portable runtime import cancelled"))?;
     state.runtime_cancel.store(false, Ordering::Release);
     let cancel = state.runtime_cancel.clone();
+    let mut throttle = ProviderProgressThrottle::new(PROVIDER_PROGRESS_INTERVAL);
     providers::portable::import_bundle(&path, cancel, move |progress| {
-        let _ = app.emit("provider-install-progress", progress);
+        if throttle.should_emit(progress.phase, std::time::Instant::now()) {
+            let _ = app.emit("provider-install-progress", progress);
+        }
     })
     .await
 }
@@ -770,6 +815,20 @@ mod tests {
         assert_eq!(invalid.format, ArtifactFormat::Unknown);
         assert!(!invalid.ready_files() && invalid.incomplete && !invalid.notes.is_empty());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn provider_progress_throttle_emits_phase_changes_immediately_and_limits_bursts() {
+        let mut throttle = ProviderProgressThrottle::new(std::time::Duration::from_millis(100));
+        let start = std::time::Instant::now();
+        assert!(throttle.should_emit("environment", start));
+        assert!(!throttle.should_emit("environment", start + std::time::Duration::from_millis(20)));
+        assert!(!throttle.should_emit("environment", start + std::time::Duration::from_millis(99)));
+        assert!(throttle.should_emit("environment", start + std::time::Duration::from_millis(100)));
+        // Phase transitions never wait for the interval.
+        assert!(throttle.should_emit("packages", start + std::time::Duration::from_millis(105)));
+        assert!(!throttle.should_emit("packages", start + std::time::Duration::from_millis(110)));
+        assert!(throttle.should_emit("complete", start + std::time::Duration::from_millis(111)));
     }
 }
 

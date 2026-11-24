@@ -3,7 +3,8 @@ import StableLabel from "./StableLabel";
 import { useEffect, useState } from "react";
 import { errorMessage } from "../api/errors";
 import { useI18n } from "../i18n/i18n";
-import { dismissTask, getTaskSnapshot, updateTask, useTasks, type AppTask } from "../state/taskRegistry";
+import { taskPhaseLabelKey } from "../runtime/runtimeUtils";
+import { dismissTask, getTaskSnapshot, isDownloadCenterTask, updateTask, useTasks, type AppTask, type TaskKind } from "../state/taskRegistry";
 import { useLocalTaskCancellationIds } from "./TaskCancellation";
 import { formatBytes, formatDuration, formatSpeedBps } from "../lib/units";
 import { estimateRemainingSeconds } from "../lib/transfer";
@@ -12,22 +13,33 @@ import ProgressBar from "./ProgressBar";
 import DiagnosticDetails, { isLongDiagnostic, summarizeDiagnostic } from "./DiagnosticDetails";
 import FeedbackBanner from "./FeedbackBanner";
 
+export function formatTaskPhase(phase: string | undefined, t: ReturnType<typeof useI18n>["t"]): string {
+  if (!phase) return t("ui.taskWorking");
+  const key = taskPhaseLabelKey(phase);
+  return key ? t(`ui.${key}`) : phase;
+}
+
 /**
  * Transfer detail for a task that reports bytes:
  * "1.20 GiB / 4.00 GiB · 88.0 MiB/s · 35s left". `remaining` words the
  * countdown for the current language.
  */
 export function transferLabel(task: AppTask, remaining: (time: string) => string): string | null {
-  if (task.received === undefined || !task.total || task.total <= 0) return null;
-  const moved = `${formatBytes(task.received)} / ${formatBytes(task.total)}`;
-  if (!task.speedBps) return moved;
-  const seconds = estimateRemainingSeconds(task.received, task.total, task.speedBps);
+  if (task.received === undefined) return null;
+  const hasTotal = Boolean(task.total && task.total > 0);
+  if (!hasTotal && task.received <= 0) return null;
+  const moved = hasTotal
+    ? `${formatBytes(task.received)} / ${formatBytes(task.total!)}`
+    : formatBytes(task.received);
+  if (task.speedBps === undefined || !Number.isFinite(task.speedBps) || task.speedBps < 0) return moved;
   const speed = `${moved} · ${formatSpeedBps(task.speedBps)}`;
+  if (!hasTotal) return speed;
+  const seconds = estimateRemainingSeconds(task.received, task.total!, task.speedBps);
   return seconds === null ? speed : `${speed} · ${remaining(formatDuration(seconds))}`;
 }
 
 function statusLabel(task: AppTask, t: ReturnType<typeof useI18n>["t"]): string {
-  if (task.state === "running") return task.phase || t("ui.taskWorking");
+  if (task.state === "running") return formatTaskPhase(task.phase, t);
   if (task.state === "cancelling") return t("ui.taskCancelling");
   if (task.state === "completed") return t("ui.taskCompleted");
   if (task.state === "cancelled") return t(task.pausable ? "ui.taskPaused" : "ui.taskCancelled");
@@ -35,9 +47,22 @@ function statusLabel(task: AppTask, t: ReturnType<typeof useI18n>["t"]): string 
   return t("ui.taskFailed");
 }
 
-export default function TaskStrip({ launchesOnly = false }: { launchesOnly?: boolean }) {
+export default function TaskStrip({
+  launchesOnly = false,
+  excludeKinds,
+}: {
+  launchesOnly?: boolean;
+  excludeKinds?: readonly TaskKind[];
+}) {
   const { t } = useI18n();
-  const tasks = useTasks().filter(task => (task.kind === "model-launch") === launchesOnly);
+  const excludeDownloads = Boolean(excludeKinds?.includes("model-download"));
+  const tasks = useTasks().filter((task) =>
+    launchesOnly
+      ? task.kind === "model-launch"
+      : task.kind !== "model-launch"
+        && (!excludeKinds || !excludeKinds.includes(task.kind))
+        && (!excludeDownloads || !isDownloadCenterTask(task)),
+  );
   const localTaskIds = useLocalTaskCancellationIds();
   const [cancelError, setCancelError] = useState<string | null>(null);
   useEffect(() => {

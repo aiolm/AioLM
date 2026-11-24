@@ -36,7 +36,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
-  removeTask(MODEL_DOWNLOAD_TASK_ID);
+  for (const task of getTaskSnapshot()) removeTask(task.id);
 });
 
 describe('model update lifecycle', () => {
@@ -87,11 +87,17 @@ describe('model update lifecycle', () => {
       let updating!: Promise<void>;
       act(() => { updating = result.current.update(modelPath); });
       expect(result.current.busy).toBe(true);
-      expect(getTaskSnapshot()[0]).toMatchObject({ id: MODEL_DOWNLOAD_TASK_ID, received: 0, total: 2048, interruptible: true });
-      expect(invoke).toHaveBeenCalledWith('hf_update_model', {
-        path: modelPath, modelsDir: catalog.directory, expectedRevision: 'b'.repeat(40),
+      const task = getTaskSnapshot()[0]!;
+      expect(task.id.startsWith(`${MODEL_DOWNLOAD_TASK_ID}:`)).toBe(true);
+      expect(task).toMatchObject({ received: 0, total: 2048, interruptible: true });
+      const updateArgs = vi.mocked(invoke).mock.calls.find(([cmd]) => cmd === 'hf_update_model')?.[1];
+      expect(updateArgs).toMatchObject({
+        path: modelPath,
+        modelsDir: catalog.directory,
+        expectedRevision: 'b'.repeat(40),
       });
-      act(() => removeTask(MODEL_DOWNLOAD_TASK_ID));
+      expect(typeof updateArgs?.downloadId).toBe('string');
+      act(() => removeTask(task.id));
       expect(result.current.busy).toBe(true);
       await act(async () => { transfer.resolve(committed); await updating; });
       expect(result.current.busy).toBe(false);
@@ -110,8 +116,9 @@ describe('model update lifecycle', () => {
       await waitFor(() => expect(result.current.checking).toBe(false));
       let updating!: Promise<void>;
       act(() => { updating = result.current.update(modelPath); });
+      const ownTaskId = getTaskSnapshot()[0]!.id;
       const cancelNew = vi.fn();
-      await act(() => registerTask({ id: MODEL_DOWNLOAD_TASK_ID, kind: 'model-download', label: 'New transfer', interruptible: true, cancel: cancelNew }));
+      await act(() => registerTask({ id: ownTaskId, kind: 'model-download', label: 'New transfer', interruptible: true, cancel: cancelNew }));
       if (exit === 'unmount') unmount();
       else rerender({ ...initialProps, active: false });
       await act(async () => { transfer.resolve(committed); await updating; });
@@ -153,9 +160,10 @@ describe('model update lifecycle', () => {
     await waitFor(() => expect(result.current.checking).toBe(false));
     let updating!: Promise<void>;
     act(() => { updating = result.current.update(modelPath); });
+    const ownTaskId = getTaskSnapshot()[0]!.id;
     act(() => {
-      registerTask({ id: MODEL_DOWNLOAD_TASK_ID, kind: 'model-download', label: 'Replacement', interruptible: true, cancel: vi.fn() });
-      removeTask(MODEL_DOWNLOAD_TASK_ID);
+      registerTask({ id: ownTaskId, kind: 'model-download', label: 'Replacement', interruptible: true, cancel: vi.fn() });
+      removeTask(ownTaskId);
     });
     await act(async () => { transfer.reject(new IpcError('internal', 'Old transfer failed')); await updating; });
     expect(result.current.updateError).toBeUndefined();

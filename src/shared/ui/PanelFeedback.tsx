@@ -61,7 +61,11 @@ export function PanelFeedbackProvider({ children }: { children: ReactNode }) {
 
 export function usePanelFeedbackSummary() {
   const context = useContext(FeedbackContext);
-  return { count: context?.count ?? 0, attention: context?.attention ?? 0 };
+  return {
+    count: context?.count ?? 0,
+    attention: context?.attention ?? 0,
+    attentionSignatures: context?.attentionSignatures ?? [],
+  };
 }
 
 export function PanelFeedbackOutlet() {

@@ -8,6 +8,7 @@ import App from "./App";
 import * as api from "../shared/api/index";
 import { finishTask, getTaskSnapshot, registerTask, removeTask, updateTask } from "../shared/state/taskRegistry";
 import { LocalTaskCancelButton } from "../shared/ui/TaskCancellation";
+import { resetPendingDownloadsStoreForTests } from "../shared/state/pendingDownloadsStore";
 import { setSessionActivity } from "../shared/state/sessionActivity";
 import type { ModelSettingsDialogProps } from "../features/model-settings/ModelSettingsDialog";
 import type { ViewId } from "../shared/types/navigation";
@@ -47,8 +48,8 @@ function storedPreferenceValues(): unknown {
 }
 
 describe("Workspace navigation", () => {
-  beforeEach(() => { localStorage.clear(); store = createTestStore(); showBenchmarkCancel = false; benchmarkLoading = null; cancelBenchmark.mockReset(); });
-  afterEach(() => { act(() => { for (const task of getTaskSnapshot()) removeTask(task.id); setSessionActivity("default", false); }); vi.restoreAllMocks(); });
+  beforeEach(() => { localStorage.clear(); resetPendingDownloadsStoreForTests(); store = createTestStore(); showBenchmarkCancel = false; benchmarkLoading = null; cancelBenchmark.mockReset(); });
+  afterEach(() => { act(() => { resetPendingDownloadsStoreForTests(); for (const task of getTaskSnapshot()) removeTask(task.id); setSessionActivity("default", false); }); vi.restoreAllMocks(); });
   const mount = () => render(<I18nProvider initialLocale="en"><App /></I18nProvider>);
   const mainTab = (name: string) => within(screen.getByRole("navigation", { name: "Primary navigation" })).getByRole("button", { name });
 
@@ -162,15 +163,15 @@ describe("Workspace navigation", () => {
     expect(screen.queryByLabelText('Conversation draft')).not.toBeInTheDocument();
   });
 
-  it("opens global errors above the retained activity bar and preserves dismissal", async () => {
+  it("opens global errors in the header activity popover and preserves dismissal", async () => {
     store.actionError = "The model could not be started.";
-    const view = mount();
-    const drawer = view.container.querySelector<HTMLDetailsElement>("details.app-activity")!;
-    await waitFor(() => expect(drawer.open).toBe(true));
-    expect(drawer).not.toHaveAttribute("data-empty");
+    mount();
+    expect(document.querySelector("details.app-activity")).toBeNull();
+    const popover = screen.getByTestId("activity-center-popover");
+    await waitFor(() => expect(popover).not.toHaveAttribute("hidden"));
     const error = screen.getByRole("alert");
     expect(error).toHaveTextContent("The model could not be started.");
-    expect(drawer.querySelector("summary")).toBeVisible();
+    expect(screen.getByTestId("activity-center-trigger")).toBeVisible();
     fireEvent.click(within(error).getByRole("button", { name: "Dismiss" }));
     expect(store.clearErrors).toHaveBeenCalledOnce();
   });
@@ -216,9 +217,9 @@ describe("Workspace navigation", () => {
     showBenchmarkCancel = true;
     let release!: () => void;
     benchmarkLoading = new Promise<void>(resolve => { release = resolve; });
-    const view = mount();
+    mount();
     act(() => { registerTask({ id: "performance-benchmark-active", kind: "benchmark", label: "Benchmark task", interruptible: true, cancel: cancelBenchmark }); });
-    fireEvent.click(view.container.querySelector("details.app-activity > summary")!);
+    fireEvent.click(screen.getByTestId("activity-center-trigger"));
     const strip = screen.getByTestId("task-strip");
     expect(within(strip).getByRole("button", { name: "Cancel" })).toBeEnabled();
     fireEvent.click(mainTab("Benchmark"));
@@ -275,6 +276,9 @@ describe("Workspace navigation", () => {
     store.status = { state: 'running', model: 'models/loaded.gguf' };
     mount();
     const execution = screen.getByRole('group', { name: 'Default execution' });
+    expect(execution.querySelector('.aiolm-context-scope')).toBeNull();
+    expect(within(execution).getByTestId('launch-status-trigger')).toHaveTextContent('model loaded');
+    expect(within(execution).getByRole('button', { name: 'Unload' })).toBeEnabled();
     expect(within(execution).getByRole('button', { name: 'Choose model: loaded.gguf' })).toBeEnabled();
     fireEvent.click(within(execution).getByRole('button', { name: 'Model settings' }));
     const settings = await screen.findByRole('dialog', { name: 'Model settings editor' });
@@ -287,7 +291,7 @@ describe("Workspace navigation", () => {
     store.status = { state: 'stopped', model: 'model.gguf' };
     mount();
     expect(screen.queryByText('model.gguf')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Start' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start' })).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: 'Choose model' }));
     await screen.findByRole('dialog', { name: 'Model settings editor' });
     expect(screen.getByLabelText('Editor model')).toHaveValue('model.gguf');
@@ -295,94 +299,105 @@ describe("Workspace navigation", () => {
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
 
-  it("reports task progress without re-rendering mounted panels", async () => {
-    const view = mount();
+  it("reports download progress in the header center without re-rendering mounted panels", async () => {
+    mount();
     await screen.findByLabelText("Conversation draft");
-    act(() => { registerTask({ id: "download", kind: "model-download", label: "model.gguf", interruptible: true, received: 0, total: 100 }); });
-    const summary = view.container.querySelector("details.app-activity > summary")!;
-    expect(summary.querySelector(".app-activity-count")).toHaveTextContent("1");
+    act(() => { registerTask({ id: "model-download:dl-1", kind: "model-download", repoId: "owner/model", filePath: "model.gguf", label: "model.gguf", interruptible: true, received: 0, total: 100 }); });
+    const activityTrigger = screen.getByTestId("activity-center-trigger");
+    expect(activityTrigger).toBeVisible();
+    expect(screen.queryByTestId("activity-center-badge")).not.toBeInTheDocument();
+    const downloadsTrigger = screen.getByTestId("downloads-center-trigger");
+    expect(downloadsTrigger).toHaveAccessibleName("Downloads: 1 active (0%)");
+    expect(within(downloadsTrigger).getByTestId("downloads-center-badge")).toHaveTextContent("1");
     const renders = chatRenders;
-    // A download reports up to ten progress events a second.
-    for (const received of [10, 20, 30, 40, 50]) act(() => { updateTask("download", { received }); });
+    // A download reports up to ten progress events a second without waking the workspace.
+    for (const received of [10, 20, 30, 40, 50]) act(() => { updateTask("model-download:dl-1", { received }); });
     expect(chatRenders).toBe(renders);
-    act(() => { finishTask("download", "failed", "Network lost"); });
-    expect(summary.querySelector(".app-activity-count")).toHaveTextContent("1");
-    expect(screen.getByText("Network lost")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Dismiss: model.gguf" })).toBeVisible();
+    expect(downloadsTrigger).toHaveAccessibleName("Downloads: 1 active (50%)");
+    act(() => { finishTask("model-download:dl-1", "failed", "Network lost"); });
+    const popover = await screen.findByTestId("downloads-center-popover");
+    expect(within(popover).getByText("Network lost")).toBeVisible();
+    expect(within(popover).getByRole("button", { name: "Dismiss: model.gguf" })).toBeVisible();
+    expect(screen.queryByTestId("activity-center-badge")).not.toBeInTheDocument();
   });
 
   it.each(["failed", "crashed"] as const)("reveals a %s background task and draws attention to later failures after collapse", async state => {
-    const view = mount();
+    mount();
     await screen.findByLabelText("Conversation draft");
-    const drawer = view.container.querySelector<HTMLDetailsElement>("details.app-activity")!;
-    const summary = drawer.querySelector("summary")!;
-    const detail = ["Download connection lost", ...Array.from({ length: 8 }, (_, index) => `Diagnostic line ${index}: connection closed unexpectedly`)].join("\n");
-    act(() => { registerTask({ id: "background-download", kind: "model-download", label: "Background download", interruptible: true }); });
-    expect(drawer.open).toBe(false);
+    const trigger = screen.getByTestId("activity-center-trigger");
+    const popover = screen.getByTestId("activity-center-popover");
+    const detail = ["Runtime connection lost", ...Array.from({ length: 8 }, (_, index) => `Diagnostic line ${index}: connection closed unexpectedly`)].join("\n");
+    act(() => { registerTask({ id: "background-runtime", kind: "runtime", label: "Background runtime", interruptible: true }); });
+    expect(popover).toHaveAttribute("hidden");
 
-    act(() => { finishTask("background-download", state, detail); });
-    expect(drawer.open).toBe(true);
-    expect(screen.getByText("Download connection lost")).toBeVisible();
+    act(() => { finishTask("background-runtime", state, detail); });
+    expect(popover).not.toHaveAttribute("hidden");
+    expect(screen.getByText("Runtime connection lost")).toBeVisible();
     const full = screen.getByLabelText("Full diagnostic");
     expect(full).not.toBeVisible();
     fireEvent.click(screen.getByText("Show full diagnostic"));
     expect(full).toBeVisible();
     expect(full).toHaveTextContent("Diagnostic line 7: connection closed unexpectedly");
-    expect(screen.getByRole("button", { name: "Dismiss: Background download" })).toBeVisible();
-    expect(screen.getAllByText("Background download")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Dismiss: Background runtime" })).toBeVisible();
+    expect(screen.getAllByText("Background runtime")).toHaveLength(1);
 
-    fireEvent.click(summary);
-    expect(drawer.open).toBe(false);
-    act(() => { updateTask("background-download", { phase: "Diagnostic updated" }); });
-    expect(drawer.open).toBe(false);
-    expect(summary.querySelector(".app-activity-error")).toHaveTextContent(/\S/);
+    fireEvent.click(trigger);
+    expect(popover).toHaveAttribute("hidden");
+    act(() => { updateTask("background-runtime", { phase: "Diagnostic updated" }); });
+    expect(popover).toHaveAttribute("hidden");
+    expect(trigger).toHaveClass("is-error");
     act(() => { registerTask({ id: "background-benchmark", kind: "benchmark", label: "Background benchmark", interruptible: true }); });
-    expect(drawer.open).toBe(false);
+    expect(popover).toHaveAttribute("hidden");
     act(() => { finishTask("background-benchmark", "failed", "Benchmark worker disconnected"); });
-    expect(drawer.open).toBe(true);
+    expect(popover).not.toHaveAttribute("hidden");
     expect(screen.getByText("Benchmark worker disconnected")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss: Background download" }));
-    expect(screen.queryByText("Background download")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss: Background runtime" }));
+    expect(screen.queryByText("Background runtime")).not.toBeInTheDocument();
 
-    fireEvent.click(summary);
+    fireEvent.click(trigger);
+    expect(popover).toHaveAttribute("hidden");
     act(() => {
       removeTask("background-benchmark");
       registerTask({ id: "replacement-task", kind: "other", label: "Replacement task", state: "failed", detail: "A different background operation failed", interruptible: true });
     });
-    expect(drawer.open).toBe(true);
+    expect(popover).not.toHaveAttribute("hidden");
     expect(screen.getByText("A different background operation failed")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Dismiss: Replacement task" }));
-    expect(drawer).toHaveAttribute("data-empty");
-    expect(summary.querySelector(".app-activity-error")).toBeNull();
+    expect(popover).toHaveAttribute("hidden");
+    expect(trigger).not.toHaveClass("is-error");
+    expect(screen.queryByTestId("activity-center-badge")).not.toBeInTheDocument();
   });
 
   it.each(["completed", "cancelled"] as const)("does not flag %s background work as a failure", async state => {
-    const view = mount();
+    mount();
     await screen.findByLabelText("Conversation draft");
-    const drawer = view.container.querySelector<HTMLDetailsElement>("details.app-activity")!;
-    const summary = drawer.querySelector("summary")!;
+    const trigger = screen.getByTestId("activity-center-trigger");
+    const popover = screen.getByTestId("activity-center-popover");
     act(() => { registerTask({ id: "expected-finish", kind: "other", label: "Expected finish", interruptible: true }); });
     act(() => { finishTask("expected-finish", state); });
-    expect(drawer.open).toBe(false);
-    expect(summary.querySelector(".app-activity-error")).toBeNull();
-    fireEvent.click(summary);
+    expect(popover).toHaveAttribute("hidden");
+    expect(trigger).not.toHaveClass("is-error");
+    fireEvent.click(trigger);
+    expect(popover).not.toHaveAttribute("hidden");
     expect(screen.getByText(state === "completed" ? "Completed" : "Cancelled")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Dismiss: Expected finish" }));
-    expect(drawer).toHaveAttribute("data-empty");
+    expect(popover).toHaveAttribute("hidden");
+    expect(screen.queryByTestId("activity-center-badge")).not.toBeInTheDocument();
   });
 
-  it("keeps failed model launches in their separate strip without opening ordinary activity", async () => {
-    const view = mount();
+  it("keeps failed model launches in their floating header popover without opening ordinary activity", async () => {
+    mount();
     await screen.findByLabelText("Conversation draft");
     act(() => { registerTask({ id: "separate-launch", kind: "model-launch", label: "Work model", interruptible: true }); });
     act(() => { finishTask("separate-launch", "failed", "Model engine could not start"); });
-    const drawer = view.container.querySelector<HTMLDetailsElement>("details.app-activity")!;
-    expect(drawer).toHaveAttribute("data-empty");
-    expect(drawer.open).toBe(false);
-    const launch = screen.getByTestId("launch-task-strip");
+    const activityPopover = screen.getByTestId("activity-center-popover");
+    expect(activityPopover).toHaveAttribute("hidden");
+    expect(screen.queryByTestId("activity-center-badge")).not.toBeInTheDocument();
+    const launch = await screen.findByTestId("launch-status-popover");
     expect(within(launch).getByRole("alert")).toHaveTextContent("Model engine could not start");
     fireEvent.click(within(launch).getByRole("button", { name: "Dismiss: Work model" }));
-    expect(screen.queryByTestId("launch-task-strip")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("launch-status-popover")).not.toBeInTheDocument();
+    expect(screen.getByTestId("launch-status-trigger")).toBeVisible();
   });
 
   it("guards navigation while settings can open without leaving the current workspace", async () => {
@@ -545,6 +560,25 @@ describe("Workspace navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Unload" }));
     expect(store.stop).toHaveBeenCalledOnce();
     expect(screen.queryByRole("dialog", { name: "Model settings editor" })).not.toBeInTheDocument();
+    expect(store.start).not.toHaveBeenCalled();
+  });
+
+  it("keeps the header Start/Unload toggle fixed and starts a saved model or opens settings when none is set", async () => {
+    store = createTestStore({ active_model: "models/ready.gguf" });
+    store.status = { state: "stopped" };
+    const view = mount();
+    expect(screen.getByTestId("downloads-center-trigger")).toBeVisible();
+    expect(screen.getByTestId("activity-center-trigger")).toBeVisible();
+    expect(screen.getByTestId("launch-status-trigger")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    await waitFor(() => expect(store.start).toHaveBeenCalledOnce());
+
+    view.unmount();
+    store = createTestStore({ active_model: "" });
+    store.status = { state: "stopped" };
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    expect(await screen.findByRole("dialog", { name: "Model settings editor" })).toBeVisible();
     expect(store.start).not.toHaveBeenCalled();
   });
 

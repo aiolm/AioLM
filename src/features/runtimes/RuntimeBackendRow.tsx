@@ -4,9 +4,9 @@ import ProgressBar from "../../shared/ui/ProgressBar";
 import { LocalTaskCancelButton } from "../../shared/ui/TaskCancellation";
 import type * as api from "../../shared/api/types";
 import type { Locale } from "../../shared/i18n/i18nCatalog";
-import { buildPhaseLabelKey, formatRuntimeVersion, runtimeRowAction } from "../../shared/runtime/runtimeUtils";
+import { buildPhaseLabelKey, formatRuntimeVersion, isRuntimeDownloadPhase, runtimeRowAction } from "../../shared/runtime/runtimeUtils";
 import { normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
-import { formatBytes, formatMebibytes } from "../../shared/lib/units";
+import { formatBytes, formatMebibytes, formatSpeedBps } from "../../shared/lib/units";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
 import { prSourceTitle, type BackendRow } from "./runtimesHelpers";
 import { fitLabelOf, fitOf, reasonText, stateOf, suitabilityOf } from "./runtimeRowPresentation";
@@ -21,6 +21,7 @@ export interface RuntimeBackendRowProps {
   prBusy: boolean;
   bundleBusy: boolean;
   cancelBusy: boolean;
+  downloadSpeedBps?: number;
   onBlockedAction?: (message: string) => void;
   onCancelInstall: () => void;
   onInstall: (backend: string) => void;
@@ -31,7 +32,7 @@ export interface RuntimeBackendRowProps {
  * its install action on the same line, then installed versions as indented rows
  * with an aligned size and inline Remove action. */
 export default function RuntimeBackendRow({
-  t, locale, row, device, serverRunning, runtimeBusy, prBusy, bundleBusy, cancelBusy,
+  t, locale, row, device, serverRunning, runtimeBusy, prBusy, bundleBusy, cancelBusy, downloadSpeedBps,
   onBlockedAction, onCancelInstall, onInstall, onUninstall,
 }: RuntimeBackendRowProps) {
   const state = stateOf(locale, row);
@@ -52,6 +53,24 @@ export default function RuntimeBackendRow({
       : bundleBusy
         ? t("ui.runtimeBundleWorking")
         : runtimeBusy && !row.busy ? t("ui.runtimeOperationInProgress") : !info ? t("ui.noLatestResolved") : null;
+  const isDownloadProgress = Boolean(row.progress && isRuntimeDownloadPhase(row.progress.phase));
+  const showBytes = Boolean(
+    row.progress && isDownloadProgress && (row.progress.total > 0 || row.progress.received > 0),
+  );
+  const progressPercent =
+    row.progress && isDownloadProgress && row.progress.total > 0
+      ? Math.min(100, Math.round((row.progress.received / row.progress.total) * 100))
+      : undefined;
+  const progressDetail = (() => {
+    if (!row.progress || !showBytes) return null;
+    const moved = row.progress.total > 0
+      ? `${formatBytes(row.progress.received)} / ${formatBytes(row.progress.total)}`
+      : formatBytes(row.progress.received);
+    if (downloadSpeedBps !== undefined && Number.isFinite(downloadSpeedBps) && downloadSpeedBps >= 0) {
+      return `${moved} · ${formatSpeedBps(downloadSpeedBps)}`;
+    }
+    return moved;
+  })();
   return (
     <section className={`runtime-group${row.busy ? " is-busy" : ""}`} aria-labelledby={`runtime-${row.backend}`} aria-busy={row.busy}>
       <div className="runtime-group__header">
@@ -82,8 +101,8 @@ export default function RuntimeBackendRow({
       </div>
 
       {row.busy && row.progress && <div className="runtime-progress-slot">
-        <div className="runtime-progress-label"><span>{t(`ui.${buildPhaseLabelKey(row.progress.phase)}`)}</span>{row.progress.total > 0 && <span className="runtime-number">{formatBytes(row.progress.received)} / {formatBytes(row.progress.total)}</span>}</div>
-        <ProgressBar label={t("ui.installedBuilds", { label: row.backend })} value={row.progress.total > 0 ? Math.round(row.progress.received / row.progress.total * 100) : undefined} />
+        <div className="runtime-progress-label"><span>{t(`ui.${buildPhaseLabelKey(row.progress.phase)}`)}</span>{progressDetail && <span className="runtime-number">{progressDetail}</span>}</div>
+        <ProgressBar label={t("ui.installedBuilds", { label: row.backend })} value={progressPercent} />
       </div>}
 
       {row.installed.length > 0 && <ul className="runtime-versions" aria-label={t("ui.installedBuilds", { label: backendName })}>

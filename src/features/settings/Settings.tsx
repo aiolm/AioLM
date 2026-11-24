@@ -275,17 +275,19 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
   return <div className="app-page-scroll settings-page">
     <div className="settings-header"><div><h1>{t("settings.title")}</h1><p>{t("settings.subtitle")}</p></div><span className={`settings-save-slot ${saveState === "saved" ? "" : "is-empty"}`} role={saveState === "saved" ? "status" : undefined} aria-live={saveState === "saved" ? "polite" : undefined} aria-hidden={saveState === "saved" ? undefined : true}><StatusBadge label={t("common.saved")} tone="success" /></span></div>
     <div className="settings-layout">
-      <input type="search" className="app-input settings-search" aria-label={search.label} placeholder={search.label} value={query} onChange={event => setQuery(event.target.value)} />
-      <TabNav
-        items={sections}
-        active={section}
-        onSelect={(next) => { setSection(next); if (query) setQuery(""); }}
-        label={t("settings.title")}
-        orientation="horizontal"
-        tabId={(id) => `settings-tab-${id}`}
-        panelId={() => "settings-tabpanel"}
-        className="settings-nav"
-      />
+      <div className="settings-toolbar">
+        <TabNav
+          items={sections}
+          active={section}
+          onSelect={(next) => { setSection(next); if (query) setQuery(""); }}
+          label={t("settings.title")}
+          orientation="horizontal"
+          tabId={(id) => `settings-tab-${id}`}
+          panelId={() => "settings-tabpanel"}
+          className="settings-nav"
+        />
+        <input type="search" className="app-input settings-search" aria-label={search.label} placeholder={search.label} value={query} onChange={event => setQuery(event.target.value)} />
+      </div>
       <SearchContext.Provider value={normalizedQuery}>
       <section className={`settings-content${normalizedQuery ? " is-searching" : ""}`} role="tabpanel" id="settings-tabpanel" aria-labelledby={normalizedQuery ? undefined : `settings-tab-${section}`} aria-label={normalizedQuery ? search.label : undefined} tabIndex={-1}>
         {(normalizedQuery || section === "general") && <Group id="general" title={t("settings.general")}>

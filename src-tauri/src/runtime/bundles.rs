@@ -354,7 +354,12 @@ fn prepare_export_root(
     let result = (|| -> Result<(), AppError> {
         fs::create_dir_all(&snapshot).map_err(|error| AppError::from_io(&error))?;
         copy_runtime_tree(root, &snapshot, cancel)?;
-        copy_backend_runtime_dependencies(backend, &snapshot, cancel)?;
+        copy_backend_runtime_dependencies_with_context(
+            backend,
+            &snapshot,
+            cancel,
+            DependencyPackagingContext::Bundle,
+        )?;
         copy_msvc_runtime_dependencies(&snapshot, cancel)?;
         verify_runtime_files(&snapshot)
     })();
@@ -392,6 +397,24 @@ pub fn export_bundle(
     build: &str,
     progress: ProgressSink<'_>,
     cancel: &Arc<AtomicBool>,
+) -> Result<RuntimeBundleInfo, AppError> {
+    export_bundle_with_interval(
+        output,
+        backend,
+        build,
+        progress,
+        cancel,
+        DOWNLOAD_PROGRESS_INTERVAL,
+    )
+}
+
+pub(super) fn export_bundle_with_interval(
+    output: &Path,
+    backend: &str,
+    build: &str,
+    progress: ProgressSink<'_>,
+    cancel: &Arc<AtomicBool>,
+    progress_interval: Duration,
 ) -> Result<RuntimeBundleInfo, AppError> {
     validate_runtime_identifiers(backend, build)?;
     let root = runtime_dir(backend, build)?;
@@ -494,6 +517,8 @@ pub fn export_bundle(
         let file = fs::File::create(&temp).map_err(|error| AppError::from_io(&error))?;
         let mut archive = zip::ZipWriter::new(file);
         let mut copied_bytes = 0_u64;
+        let mut reported_bytes = 0_u64;
+        let mut reported_at = Instant::now();
         let options = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated);
         archive
@@ -533,13 +558,22 @@ pub fn export_bundle(
                     .map_err(|error| AppError::from_io(&error))?;
                 file_bytes = file_bytes.saturating_add(read as u64);
                 copied_bytes = copied_bytes.saturating_add(read as u64);
-                progress("packaging", copied_bytes as f64, total_bytes as f64);
+                if copied_bytes != reported_bytes
+                    && (reported_bytes == 0 || reported_at.elapsed() >= progress_interval)
+                {
+                    progress("packaging", copied_bytes as f64, total_bytes as f64);
+                    reported_bytes = copied_bytes;
+                    reported_at = Instant::now();
+                }
             }
             if file_bytes != *declared_bytes {
                 return Err(AppError::validation(format!(
                     "runtime file changed while exporting: {relative}"
                 )));
             }
+        }
+        if copied_bytes != reported_bytes {
+            progress("packaging", copied_bytes as f64, total_bytes as f64);
         }
         archive
             .start_file(format!("{root_name}/{RUNTIME_BUNDLE_MANIFEST}"), options)

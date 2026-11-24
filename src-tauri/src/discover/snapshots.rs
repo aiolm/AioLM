@@ -169,6 +169,7 @@ pub(super) fn pending_gguf_companions(
 
 pub(super) async fn download_gguf_companions(
     app: &AppHandle,
+    download_id: &str,
     repo: &str,
     revision: &str,
     directory: &Path,
@@ -193,7 +194,15 @@ pub(super) async fn download_gguf_companions(
             .as_deref()
             .filter(|oid| digests::valid_oid(Some(oid)));
         if verify_existing(&target, file, receipts.as_deref(), cancel, |read| {
-            emit_progress(app, repo, &file.path, "verifying", completed + read, total)
+            emit_progress(
+                app,
+                download_id,
+                repo,
+                &file.path,
+                "verifying",
+                completed + read,
+                total,
+            )
         })
         .await?
         {
@@ -210,7 +219,15 @@ pub(super) async fn download_gguf_companions(
             oid,
             cancel,
             |phase, received, _| {
-                emit_progress(app, repo, &file.path, phase, completed + received, total)
+                emit_progress(
+                    app,
+                    download_id,
+                    repo,
+                    &file.path,
+                    phase,
+                    completed + received,
+                    total,
+                )
             },
         )
         .await?;
@@ -672,6 +689,7 @@ fn snapshot_directory(
 
 pub async fn download_snapshot(
     app: AppHandle,
+    download_id: &str,
     repo: &str,
     models_dir: &str,
     file_path: Option<&str>,
@@ -722,16 +740,59 @@ pub async fn download_snapshot(
     );
     let pending_id = pending.id.clone();
     pending::remember(pending);
+    let mut progress_throttle = SnapshotProgressThrottle::new(DOWNLOAD_UPDATE_INTERVAL);
     let artifact = download_snapshot_files(
         &snapshot,
         &mut manifest,
         crate::benchmark::data_root().ok().as_deref(),
         cancel,
-        |file, phase, received, total| emit_progress(&app, repo, file, phase, received, total),
+        |file, phase, received, total| {
+            if phase == "complete" {
+                pending::forget(&pending_id);
+            }
+            if progress_throttle.should_emit(phase, received, total) {
+                emit_progress(&app, download_id, repo, file, phase, received, total);
+            }
+        },
     )
     .await?;
     pending::forget(&pending_id);
     Ok(artifact)
+}
+
+struct SnapshotProgressThrottle {
+    last_phase: Option<String>,
+    last_received: u64,
+    last_emitted: Option<std::time::Instant>,
+    interval: std::time::Duration,
+}
+
+impl SnapshotProgressThrottle {
+    fn new(interval: std::time::Duration) -> Self {
+        Self {
+            last_phase: None,
+            last_received: 0,
+            last_emitted: None,
+            interval,
+        }
+    }
+
+    fn should_emit(&mut self, phase: &str, received: u64, total: u64) -> bool {
+        let now = std::time::Instant::now();
+        let phase_changed = self.last_phase.as_deref() != Some(phase);
+        let reached_total = total > 0 && received >= total && self.last_received < total;
+        let elapsed = self
+            .last_emitted
+            .is_none_or(|previous| now.saturating_duration_since(previous) >= self.interval);
+        if phase_changed || reached_total || phase == "complete" || elapsed {
+            self.last_phase = Some(phase.to_owned());
+            self.last_received = received;
+            self.last_emitted = Some(now);
+            true
+        } else {
+            false
+        }
+    }
 }
 
 /// Keep metadata resolution and the app event adapter outside the install loop,
@@ -810,7 +871,9 @@ where
                 progress(&file.path, "downloading", completed, total);
                 continue;
             }
-            Ok(false) => invalidate()?,
+            Ok(false) => {
+                invalidate()?;
+            }
             Err(error) => {
                 // Cancellation is not evidence that existing data is bad.
                 if error.kind != ErrorKind::Cancelled {
@@ -1889,6 +1952,20 @@ mod tests {
             .await
             .is_err());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn snapshot_progress_throttle_preserves_phase_changes_and_completion() {
+        let mut throttle = SnapshotProgressThrottle::new(std::time::Duration::from_secs(60));
+        assert!(throttle.should_emit("downloading", 0, 100));
+        assert!(!throttle.should_emit("downloading", 25, 100));
+        assert!(!throttle.should_emit("downloading", 50, 100));
+        assert!(throttle.should_emit("verifying", 50, 100));
+        assert!(!throttle.should_emit("verifying", 75, 100));
+        assert!(throttle.should_emit("downloading", 75, 100));
+        assert!(throttle.should_emit("downloading", 100, 100));
+        assert!(!throttle.should_emit("downloading", 100, 100));
+        assert!(throttle.should_emit("complete", 100, 100));
     }
 
     #[cfg(unix)]

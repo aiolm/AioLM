@@ -249,8 +249,11 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, on
           <RuntimeDeviceCard t={t} device={rt.device} deviceSummary={deviceSummary} />
           {!llama && <ProviderEnvironments active={active} provider={selected} initialCatalog={inventory.catalog} initialRuntimes={inventory.runtimes} revision={providerRevision} cfg={store.cfg} resourcesInUse={rt.serverRunning} operationBusy={rt.runtimeBusy || adapterBusy} onBusyChange={setProviderBusy} onRemoved={() => { void store.loadConfig(); }} />}
           {llama && <>
+          {rt.failure && rt.hasFailedRuntimeDownload && (
+            <FeedbackBanner tone="error" title={t("error.wrong")} onDismiss={() => rt.setFailure(null)}>{rt.failure}</FeedbackBanner>
+          )}
           <PanelFeedback>
-            {rt.failure && <FeedbackBanner tone="error" title={t("error.wrong")} onDismiss={() => rt.setFailure(null)}>{rt.failure}</FeedbackBanner>}
+            {rt.failure && !rt.hasFailedRuntimeDownload && <FeedbackBanner tone="error" title={t("error.wrong")} onDismiss={() => rt.setFailure(null)}>{rt.failure}</FeedbackBanner>}
             {rt.loadError && <FeedbackBanner tone="error">{`${t("ui.runtimeLookupFailed")}: ${normalizeDisplayText(rt.loadError)}`}</FeedbackBanner>}
           </PanelFeedback>
           {rt.flash && <FeedbackBanner tone="info" className="runtime-flash">{normalizeDisplayText(rt.flash)}</FeedbackBanner>}
@@ -271,6 +274,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, on
             prBusy={rt.prBusy}
             bundleBusy={rt.bundleBusy}
             cancelBusy={rt.cancelBusy}
+            downloadSpeedBps={rt.activeDownloadSpeedBps}
             onBlockedAction={(msg) => rt.setFailure(msg)}
             onCancelInstall={() => void rt.cancelInstall()}
             onInstall={(backend) => void rt.install(backend)}
@@ -293,6 +297,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, on
                 serverRunning={rt.serverRunning}
                 rows={rt.rows}
                 activePrProgress={activePrProgress}
+                downloadSpeedBps={rt.activeDownloadSpeedBps}
                 onReview={() => void rt.reviewPullRequest()}
               />
               <RuntimePortableBundle

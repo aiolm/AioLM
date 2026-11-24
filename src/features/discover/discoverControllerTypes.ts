@@ -9,13 +9,19 @@ export interface DiscoverProps {
   onOpenModels?: () => void;
 }
 
-export type DownloadedChoice = { path: string; projector: boolean; repo: string; destination: string }
-  & Pick<api.ModelArtifact, 'selected_file' | 'selected_weight_files'>;
+export type DownloadedChoice = {
+  path: string;
+  projector: boolean;
+  repo: string;
+  destination: string;
+  filePath?: string;
+} & Pick<api.ModelArtifact, 'selected_file' | 'selected_weight_files'>;
 export type DownloadNotice = { message: string; repo: string; destination: string };
 export interface DiscoverFeedback {
   setError: Dispatch<SetStateAction<string | null>>;
   setNotice: Dispatch<SetStateAction<DownloadNotice | null>>;
-  setDownloadedChoice: Dispatch<SetStateAction<DownloadedChoice | null>>;
+  recordDownloadedChoice: (choice: DownloadedChoice) => void;
+  clearDownloadedChoice: (target: { repo: string; destination: string; filePath?: string }) => void;
 }
 
 export interface InstalledLookup {
@@ -29,6 +35,8 @@ export interface InstalledLookup {
 export type TransferCancel = () => Promise<void> | void;
 
 export interface TransferOrigin {
+  taskId: string;
+  downloadId: string;
   repo: string;
   file: string;
   inspectionGeneration: number;

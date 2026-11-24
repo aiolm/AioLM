@@ -1,11 +1,23 @@
-import { MODEL_DOWNLOAD_TASK_ID } from '../../shared/state/modelDownloadTask';
-import { finishTask, getTaskSnapshot } from '../../shared/state/taskRegistry';
+import { isDownloadTaskActive } from '../../shared/state/modelDownloadTask';
+import { finishTask, getTaskSnapshot, type AppTask } from '../../shared/state/taskRegistry';
 import type { TransferCancel } from './discoverControllerTypes';
 
-export const transferActive = () => getTaskSnapshot().some(task => task.id === MODEL_DOWNLOAD_TASK_ID && ['running', 'cancelling'].includes(task.state));
-export const currentTransferTask = () => getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID);
-export const ownsTransferTask = (cancelToken: TransferCancel | null) => cancelToken !== null
-  && currentTransferTask()?.cancel === cancelToken;
-export const finishTransferTask = (cancelToken: TransferCancel | null, state: 'completed' | 'cancelled' | 'failed', detail?: string) => {
-  if (ownsTransferTask(cancelToken)) finishTask(MODEL_DOWNLOAD_TASK_ID, state, detail);
+export const findDownloadTask = (taskId: string): AppTask | undefined =>
+  getTaskSnapshot().find((task) => task.id === taskId);
+
+export const hasActiveDownloadMatching = (predicate: (task: AppTask) => boolean): boolean =>
+  getTaskSnapshot().some(
+    (task) => task.kind === 'model-download' && isDownloadTaskActive(task) && predicate(task),
+  );
+
+export const ownsTransferTask = (taskId: string, cancelToken: TransferCancel | null): boolean =>
+  cancelToken !== null && findDownloadTask(taskId)?.cancel === cancelToken;
+
+export const finishTransferTask = (
+  taskId: string,
+  cancelToken: TransferCancel | null,
+  state: 'completed' | 'cancelled' | 'failed',
+  detail?: string,
+) => {
+  if (ownsTransferTask(taskId, cancelToken)) finishTask(taskId, state, detail);
 };

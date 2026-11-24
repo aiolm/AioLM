@@ -1,45 +1,43 @@
 //! Hugging Face model discovery and download IPC.
 //! Failures preserve source error kinds, including cancellation through transfers.
-use crate::{config, discover, error::AppError, state::AppState};
-use std::sync::atomic::{AtomicBool, Ordering};
+use crate::{config, discover, download_jobs, error::AppError, state::AppState};
+use std::sync::atomic::Ordering;
 use tauri::State;
 
-/// The global operation lock held for one model transfer, marked as a
-/// download so runtime changes can proceed beside it (see
-/// `runtimes::runtime_change_gate`). The mark clears before the lock is
-/// released.
-struct DownloadGuard<'a> {
-    _operation: tokio::sync::MutexGuard<'a, ()>,
-    active: &'a AtomicBool,
-}
-
-impl Drop for DownloadGuard<'_> {
-    fn drop(&mut self) {
-        self.active.store(false, Ordering::Release);
+/// Resolve empty library directory inputs against saved configuration before
+/// computing target paths for concurrent download isolation.
+fn resolve_models_dir(models_dir: String) -> Result<String, AppError> {
+    if models_dir.trim().is_empty() {
+        Ok(config::load_result()?.models_dir)
+    } else {
+        Ok(models_dir)
     }
 }
 
-/// Reject contention instead of queueing a second transfer that would reset
-/// the first transfer's cancellation flag after the lock becomes available.
-/// A runtime install or removal in progress does not block a download: the
-/// two touch different files, and server starts stay excluded by both.
-fn begin_download(state: &AppState) -> Result<DownloadGuard<'_>, AppError> {
-    let operation = state
-        .operation
-        .try_lock()
-        .map_err(|_| AppError::busy("another model operation is in progress"))?;
+/// Start one tracked transfer under `DownloadJobs`, sharing one `operation`
+/// gate claim while allowing concurrent downloads to distinct targets.
+fn begin_download(
+    state: &AppState,
+    download_id: Option<String>,
+    targets: Vec<String>,
+) -> Result<(String, download_jobs::DownloadLease), AppError> {
     if state.exiting.load(Ordering::Acquire) {
         return Err(AppError::busy("application is exiting"));
     }
     if super::runtimes::runtime_resources_in_use(state)? {
         return Err(AppError::busy("stop model sessions before downloading"));
     }
-    state.discover_cancel.store(false, Ordering::Release);
-    state.model_download.store(true, Ordering::Release);
-    Ok(DownloadGuard {
-        _operation: operation,
-        active: &state.model_download,
-    })
+    let id = download_id
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let lease = state.download_jobs.begin(
+        &id,
+        targets,
+        &state.operation,
+        &state.model_download,
+    )?;
+    Ok((id, lease))
 }
 
 #[tauri::command]
@@ -67,20 +65,19 @@ pub(crate) async fn hf_download_snapshot(
     models_dir: String,
     file_path: Option<String>,
     revision: Option<String>,
+    download_id: Option<String>,
 ) -> Result<crate::providers::artifacts::ModelArtifact, AppError> {
-    let _operation = begin_download(&state)?;
-    let root = if models_dir.trim().is_empty() {
-        config::load_result()?.models_dir
-    } else {
-        models_dir
-    };
+    let root = resolve_models_dir(models_dir)?;
+    let targets = download_jobs::snapshot_target_keys(&repo_id, &root, file_path.as_deref())?;
+    let (id, lease) = begin_download(&state, download_id, targets)?;
     discover::download_snapshot(
         app,
+        &id,
         &repo_id,
         &root,
         file_path.as_deref(),
         revision.as_deref(),
-        &state.discover_cancel,
+        &lease.cancel_flag(),
     )
     .await
 }
@@ -107,19 +104,18 @@ pub(crate) async fn hf_update_model(
     path: String,
     models_dir: String,
     expected_revision: String,
+    download_id: Option<String>,
 ) -> Result<discover::ModelUpdateResult, AppError> {
-    let _operation = begin_download(&state)?;
-    let root = if models_dir.trim().is_empty() {
-        config::load_result()?.models_dir
-    } else {
-        models_dir
-    };
+    let root = resolve_models_dir(models_dir)?;
+    let targets = download_jobs::update_target_keys(&path, &root)?;
+    let (id, lease) = begin_download(&state, download_id, targets)?;
     discover::update_model(
         app,
+        &id,
         &path,
         &root,
         &expected_revision,
-        &state.discover_cancel,
+        &lease.cancel_flag(),
     )
     .await
 }
@@ -216,49 +212,61 @@ pub(crate) async fn hf_download_model(
     models_dir: String,
     include_companions: Option<bool>,
     revision: Option<String>,
+    download_id: Option<String>,
 ) -> Result<discover::DownloadedModel, AppError> {
-    let _operation = begin_download(&state)?;
-    let root = if models_dir.trim().is_empty() {
-        config::load_result()?.models_dir
-    } else {
-        models_dir
-    };
+    let companions = include_companions.unwrap_or(false);
+    let root = resolve_models_dir(models_dir)?;
+    let targets = download_jobs::gguf_target_keys(&repo_id, &file_path, &root, companions)?;
+    let (id, lease) = begin_download(&state, download_id, targets)?;
     discover::download(
         app,
+        &id,
         &repo_id,
         &file_path,
         &root,
-        state.discover_cancel.clone(),
-        include_companions.unwrap_or(false),
+        lease.cancel_flag(),
+        companions,
         revision.as_deref(),
     )
     .await
 }
 
 #[tauri::command]
-pub(crate) fn hf_cancel_download(state: State<'_, AppState>) {
-    state.discover_cancel.store(true, Ordering::Release);
+pub(crate) fn hf_cancel_download(state: State<'_, AppState>, download_id: Option<String>) {
+    state.download_jobs.cancel(download_id.as_deref());
 }
 
-/// Downloads that stopped before finishing, with the bytes already on disk.
+/// Downloads that stopped before finishing (excluding transfers currently in
+/// progress), with the bytes already on disk.
 #[tauri::command]
-pub(crate) async fn hf_pending_downloads() -> Result<Vec<discover::PendingDownload>, AppError> {
-    tokio::task::spawn_blocking(discover::pending_downloads)
+pub(crate) async fn hf_pending_downloads(
+    state: State<'_, AppState>,
+) -> Result<Vec<discover::PendingDownload>, AppError> {
+    let entries = tokio::task::spawn_blocking(discover::pending_downloads)
         .await
-        .map_err(AppError::from)
+        .map_err(AppError::from)?;
+    Ok(entries
+        .into_iter()
+        .filter(|entry| !state.download_jobs.is_pending_active(entry))
+        .collect())
 }
 
-/// Forget an interrupted download and delete its staged bytes. Refused while
-/// a download runs, since it could be the one writing them.
+/// Forget an interrupted download and delete its staged bytes. Refused when an
+/// active download transfers to the same target files.
 #[tauri::command]
 pub(crate) async fn hf_discard_download(
     state: State<'_, AppState>,
     id: String,
 ) -> Result<(), AppError> {
-    let _operation = state
-        .operation
-        .try_lock()
-        .map_err(|_| AppError::busy("wait for the current model operation to finish"))?;
+    let lookup_id = id.clone();
+    let pending = tokio::task::spawn_blocking(move || discover::find_pending_download(&lookup_id))
+        .await
+        .map_err(AppError::from)?;
+    let _discard_guard = if let Some(entry) = pending.as_ref() {
+        Some(state.download_jobs.try_discard_pending(entry)?)
+    } else {
+        None
+    };
     tokio::task::spawn_blocking(move || discover::discard_pending_download(&id))
         .await
         .map_err(AppError::from)?
@@ -268,30 +276,55 @@ pub(crate) async fn hf_discard_download(
 mod tests {
     use super::*;
 
+    fn test_models_dir() -> String {
+        std::env::temp_dir()
+            .join(format!("aiolm-cmd-dl-{}", uuid::Uuid::new_v4()))
+            .to_string_lossy()
+            .into_owned()
+    }
+
     #[test]
-    fn download_contention_does_not_reset_cancellation_or_queue_a_transfer() {
+    fn concurrent_downloads_can_cancel_independently_while_duplicates_reject() {
         let state = AppState::default();
-        let first = begin_download(&state).unwrap();
-        state.discover_cancel.store(true, Ordering::Release);
+        let root = test_models_dir();
+        let targets_a =
+            download_jobs::gguf_target_keys("owner/alpha", "alpha.gguf", &root, false).unwrap();
+        let targets_b =
+            download_jobs::gguf_target_keys("owner/beta", "beta.gguf", &root, false).unwrap();
+
+        let (id_a, lease_a) = begin_download(&state, Some("dl-a".into()), targets_a.clone()).unwrap();
+        let (id_b, lease_b) = begin_download(&state, Some("dl-b".into()), targets_b).unwrap();
+        assert_eq!(id_a, "dl-a");
+        assert_eq!(id_b, "dl-b");
+
         assert_eq!(
-            begin_download(&state)
+            begin_download(&state, Some("dl-dup".into()), targets_a)
                 .err()
-                .expect("download must be blocked")
+                .expect("duplicate target download must be blocked")
                 .kind,
             crate::error::ErrorKind::Busy,
         );
-        assert!(state.discover_cancel.load(Ordering::Acquire));
-        drop(first);
-        assert!(begin_download(&state).is_ok());
-        assert!(!state.discover_cancel.load(Ordering::Acquire));
+
+        state.download_jobs.cancel(Some("dl-a"));
+        assert!(lease_a.cancel_flag().load(Ordering::Acquire));
+        assert!(!lease_b.cancel_flag().load(Ordering::Acquire));
+
+        drop(lease_a);
+        assert!(state.model_download.load(Ordering::Acquire));
+        drop(lease_b);
+        assert!(!state.model_download.load(Ordering::Acquire));
+        assert!(state.operation.try_lock().is_ok());
     }
 
     #[test]
     fn active_model_blocks_both_download_entrypoints() {
         let state = AppState::default();
+        let root = test_models_dir();
+        let targets =
+            download_jobs::gguf_target_keys("owner/alpha", "alpha.gguf", &root, false).unwrap();
         state.server.lock().unwrap().lifecycle = crate::server::Lifecycle::Ready;
         assert_eq!(
-            begin_download(&state)
+            begin_download(&state, None, targets)
                 .err()
                 .expect("download must be blocked")
                 .kind,
@@ -302,13 +335,16 @@ mod tests {
     #[test]
     fn named_model_sessions_and_exit_block_downloads_but_runtime_changes_do_not() {
         let state = AppState::default();
+        let root = test_models_dir();
+        let targets =
+            download_jobs::gguf_target_keys("owner/alpha", "alpha.gguf", &root, false).unwrap();
         let named = state
             .sessions
             .get_or_create("synthetic-session", "Synthetic session")
             .unwrap();
         named.state.lock().unwrap().lifecycle = crate::server::Lifecycle::Ready;
         assert_eq!(
-            begin_download(&state)
+            begin_download(&state, None, targets.clone())
                 .err()
                 .expect("download must be blocked")
                 .kind,
@@ -317,7 +353,7 @@ mod tests {
         named.state.lock().unwrap().lifecycle = crate::server::Lifecycle::Stopped;
         state.exiting.store(true, Ordering::Release);
         assert_eq!(
-            begin_download(&state)
+            begin_download(&state, None, targets.clone())
                 .err()
                 .expect("download must be blocked")
                 .kind,
@@ -325,7 +361,7 @@ mod tests {
         );
         state.exiting.store(false, Ordering::Release);
         state.runtime_busy.store(true, Ordering::Release);
-        let download = begin_download(&state).unwrap();
+        let (_id, download) = begin_download(&state, None, targets).unwrap();
         assert!(state.model_download.load(Ordering::Acquire));
         drop(download);
         assert!(!state.model_download.load(Ordering::Acquire));
@@ -336,7 +372,10 @@ mod tests {
     async fn runtime_changes_proceed_beside_a_download_but_wait_for_other_operations() {
         use std::time::Duration;
         let state = AppState::default();
-        let download = begin_download(&state).unwrap();
+        let root = test_models_dir();
+        let targets =
+            download_jobs::gguf_target_keys("owner/alpha", "alpha.gguf", &root, false).unwrap();
+        let (_id, download) = begin_download(&state, None, targets).unwrap();
         let gate = tokio::time::timeout(
             Duration::from_secs(5),
             super::super::runtimes::runtime_change_gate(&state),

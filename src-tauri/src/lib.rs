@@ -12,6 +12,7 @@ mod conversations;
 #[cfg(target_os = "linux")]
 mod desktop_notifications;
 mod discover;
+mod download_jobs;
 pub mod error;
 mod gateway;
 pub mod gguf;
@@ -100,7 +101,7 @@ pub(crate) fn shutdown_managed_processes(state: &AppState) {
     state.launch_jobs.cancel_all();
     state.bench_cancel.store(true, Ordering::Release);
     state.runtime_cancel.store(true, Ordering::Release);
-    state.discover_cancel.store(true, Ordering::Release);
+    state.download_jobs.cancel_all();
     state.verify_cancel.store(true, Ordering::Release);
     // Help discoveries publish nothing after this; their children are owned
     // transient trees and are terminated below.

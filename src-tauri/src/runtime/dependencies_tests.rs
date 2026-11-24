@@ -357,3 +357,80 @@ fn missing_vendor_sdk_keeps_unavailable_dependency_errors() {
         .contains("could not package the cuda runtime libraries"));
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn rocm_sdk_candidates_sort_newest_version_first_and_keep_flat_root() {
+    let root = test_directory("rocm-sdk-candidates");
+    let base = root.join("AMD").join("ROCm");
+    let flat = root.join("ROCm");
+    for path in [
+        base.join("6.2"),
+        base.join("7.1"),
+        base.join("6.4"),
+        flat.join("bin"),
+    ] {
+        fs::create_dir_all(path).unwrap();
+    }
+    let candidates = rocm_sdk_candidates_in_bases(&[base.clone(), flat.clone()]);
+    assert_eq!(
+        candidates,
+        vec![base.join("7.1"), base.join("6.4"), base.join("6.2"), flat]
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn windows_rocm_packaging_supports_split_bin_dlls_and_lib_kernel_data() {
+    let root = test_directory("rocm-split-layout");
+    let sdk = root.join("sdk");
+    let bundle = root.join("bundle");
+    fs::create_dir_all(sdk.join("bin")).unwrap();
+    fs::create_dir_all(sdk.join("lib/rocblas/library")).unwrap();
+    fs::create_dir_all(&bundle).unwrap();
+    for name in ["amdhip64_6.dll", "hipblas.dll", "rocblas.dll"] {
+        fs::write(sdk.join("bin").join(name), name).unwrap();
+    }
+    fs::write(sdk.join("lib/rocblas/library/kernels.dat"), b"kernels").unwrap();
+    let cancel = Arc::new(AtomicBool::new(false));
+    copy_backend_runtime_dependencies_from_roots_with_context(
+        "rocm",
+        &bundle,
+        &cancel,
+        &[sdk],
+        DependencyPackagingContext::Release,
+    )
+    .unwrap();
+    assert!(rocm_runtime_dependencies_complete(&bundle));
+    assert!(bundle.join("rocblas/library/kernels.dat").is_file());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn release_rocm_missing_sdk_reports_release_guidance_not_pr_wording() {
+    let root = test_directory("release-rocm-missing-sdk");
+    fs::create_dir_all(&root).unwrap();
+    let error = copy_backend_runtime_dependencies_from_roots_with_context(
+        "rocm",
+        &root,
+        &Arc::new(AtomicBool::new(false)),
+        &[],
+        DependencyPackagingContext::Release,
+    )
+    .unwrap_err();
+    assert_eq!(error.kind, crate::error::ErrorKind::Unavailable);
+    assert!(
+        error
+            .message
+            .contains("could not package the rocm runtime libraries"),
+        "{error}"
+    );
+    assert!(
+        error.message.contains("the runtime was not activated."),
+        "{error}"
+    );
+    assert!(
+        !error.message.contains("the PR was not activated."),
+        "{error}"
+    );
+    fs::remove_dir_all(root).unwrap();
+}

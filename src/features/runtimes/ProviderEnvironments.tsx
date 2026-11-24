@@ -87,7 +87,7 @@ export default function ProviderEnvironments({ active, provider: selectedProvide
     setBusy(true); setCancellable(options.cancellable ?? false); setError(''); setProgress(''); setResult('');
     registerTask({ id: TASK_ID, kind: 'runtime', label, interruptible: true,
       ...(options.cancellable ? { cancel: () => cancelOperation(currentOperation) } : {}),
-      ...(options.notifyDownload ? { notifyOnComplete: 'download' as const } : {}) });
+      ...(options.notifyDownload ? { downloadKind: 'runtime' as const, notifyOnComplete: 'download' as const } : {}) });
     try { await operation(); setRevision(value => value + 1); if (options.inventory) notifyRuntimeInventoryChanged(); finishTask(TASK_ID, 'completed'); }
     catch (cause) {
       const message = errorMessage(cause);
@@ -137,7 +137,7 @@ export default function ProviderEnvironments({ active, provider: selectedProvide
           {external && <p className="app-section-hint">{runtimeAdapterCopy[locale].capabilities}</p>}
         </div>
         {!external && <div className="app-page-actions">
-          <button type="button" className="app-button app-button--primary" disabled={busy || blocked || !provider.availability.supported} title={lockReason ?? (!provider.availability.supported ? `${copy.unsupported} ${provider.availability.detail}`.trim() : undefined)} onClick={() => void run(`${provider.engine} · ${copy.install}`, () => api.providerInstall(provider.id, python.trim() || undefined), { cancellable: true, notifyDownload: true, inventory: true })}>{copy.install}{provider.availability.supported && provider.managed_version ? ` ${provider.managed_version}` : ''}</button>
+          <button type="button" className="app-button app-button--primary" disabled={busy || blocked || !provider.availability.supported} title={lockReason ?? (!provider.availability.supported ? `${copy.unsupported} ${provider.availability.detail}`.trim() : undefined)} onClick={() => void run(`${providerDisplayName(provider.id)} · ${copy.install}`, () => api.providerInstall(provider.id, python.trim() || undefined), { cancellable: true, notifyDownload: true, inventory: true })}>{copy.install}{provider.availability.supported && provider.managed_version ? ` ${provider.managed_version}` : ''}</button>
           <button type="button" className="app-button app-button--secondary" disabled={busy || blocked || !python.trim() || !provider.availability.supported} title={lockReason ?? (!provider.availability.supported ? `${copy.unsupported} ${provider.availability.detail}`.trim() : !python.trim() ? copy.python : undefined)} onClick={() => void run(`${provider.engine} · ${copy.register}`, () => api.providerRegister(provider.id, python.trim()), { inventory: true })}>{copy.register}</button>
         </div>}
       </div>

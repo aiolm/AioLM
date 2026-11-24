@@ -30,7 +30,7 @@
 .model-settings-flow button[aria-current="step"] { border-color: var(--ui-accent); background: var(--ui-accent-soft); }
 .model-settings-flow button:disabled { color: var(--ui-faint); opacity: 0.48; cursor: not-allowed; }
 .model-settings-flow button > span:last-child { min-width: 0; }
-.model-settings-step-number { display: inline-grid; flex: 0 0 22px; place-items: center; width: 22px; height: 22px; border: 1px solid var(--ui-border-strong); border-radius: var(--ui-radius-pill); font-size: var(--ui-text-caption); font-weight: 650; font-variant-numeric: tabular-nums; }
+.model-settings-step-number { display: inline-grid; flex: 0 0 22px; place-items: center; width: 22px; height: 22px; border: 1px solid var(--ui-border-strong); border-radius: var(--ui-radius-pill); font-size: var(--ui-text-caption); font-weight: 650; line-height: 1; text-box: trim-both cap alphabetic; font-variant-numeric: tabular-nums; }
 .model-settings-flow button[aria-current="step"] .model-settings-step-number { border-color: var(--ui-primary-fill); background: var(--ui-primary-fill); color: var(--ui-on-primary); }
 .model-settings-flow strong, .model-settings-flow small { display: block; }
 .model-settings-flow strong { font-size: var(--ui-text-support); font-weight: 600; overflow-wrap: anywhere; }
@@ -40,9 +40,8 @@
 /* Editor area */
 .model-settings-layout { display: grid; grid-template-columns: 184px minmax(0, 1fr); flex: 1; min-height: 0; overflow: hidden; }
 .model-settings-layout--setup { grid-template-columns: minmax(0, 1fr); }
-.model-settings-nav { display: flex; flex-direction: column; gap: 2px; padding: 12px 8px; border-right: 1px solid var(--ui-border); background: var(--ui-panel); overflow-y: auto; }
+.model-settings-nav { display: flex; flex-direction: column; gap: 2px; padding: 12px; border-right: 1px solid var(--ui-border); background: var(--ui-panel); overflow-y: auto; }
 .model-settings-nav .app-tab { flex-shrink: 0; justify-content: flex-start; width: 100%; text-align: start; white-space: normal; }
-.model-settings-nav .app-tab[aria-selected="true"] { box-shadow: inset 2px 0 0 var(--ui-accent); }
 .model-settings-content { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .model-settings-context { flex: 0 0 auto; min-width: 0; padding: 8px 24px; border-bottom: 1px solid var(--ui-border); background: var(--ui-panel); container: profile / inline-size; }
 /* The scrolling layout repeats the model beside the profile after the header leaves view. */
@@ -53,6 +52,7 @@
 .model-settings-context .settings-profile-banner--compact { flex-wrap: nowrap; gap: 8px; }
 .settings-profile-banner--compact .settings-profile-banner-text { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .model-settings-context .settings-profile-banner > .settings-profile-buttons { flex: 1; padding: 0; }
+.model-settings-context .settings-profile-buttons > .app-button { min-height: var(--ui-control); }
 .model-settings-context .settings-profile-picker { max-width: none; }
 .settings-profile-selected-name { flex: 1; min-width: 0; color: var(--ui-ink); font-weight: 600; overflow-wrap: anywhere; }
 /* Keep the focused control clear of the clipped scroll edges during keyboard navigation. */
@@ -133,9 +133,9 @@
 .model-settings-fields > .app-button { align-self: flex-start; }
 
 /* Runtime-reported options (guided editor) */
-.model-settings-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr)); align-items: start; gap: 16px; }
+.model-settings-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr)); align-items: stretch; gap: 16px; }
 .model-settings-options > p { grid-column: 1 / -1; margin: 0; padding: 12px; }
-.model-settings-option { min-width: 0; padding: 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); }
+.model-settings-option { display: grid; align-content: start; min-width: 0; padding: 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); }
 .model-settings-option summary { color: var(--ui-ink); font-size: var(--ui-text-support); cursor: pointer; }
 .model-settings-option summary code { display: inline; font-family: var(--font-mono); font-weight: 650; }
 .model-settings-option--wide { grid-column: 1 / -1; }
@@ -165,12 +165,11 @@
    placement follows the DOM and keyboard order; tools stay outside the grid. */
 .model-settings-body .schema-option > :is(.app-input, .app-custom-select-container, .schema-option__single, .schema-option__value) { inline-size: 100%; max-inline-size: 32rem; min-inline-size: 0; }
 .model-settings-body .schema-option > .app-button { justify-self: start; }
-.model-settings-dialog .schema-option-filter > :is(.app-input, label) { max-inline-size: 32rem; }
 @container schema-options (min-width: 36rem) {
   .model-settings-dialog .schema-option-filter { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: end; gap: 8px 16px; }
 }
 .model-settings-body .schema-option-grid__wide .schema-option > :is(.schema-option__single, .schema-option__value) { max-inline-size: none; }
-.model-settings-body .tuning-field-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr)); align-items: start; gap: 16px; }
+.model-settings-body .tuning-field-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr)); align-items: stretch; gap: 16px; }
 .model-settings-body .tuning-section .tuning-default-field:not(:has(.tuning-sampler-chain)) { padding: 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); }
 .model-settings-body .tuning-default-field { gap: 8px; }
 
@@ -219,7 +218,6 @@
   .model-settings-layout { display: flex; flex-direction: column; }
   .model-settings-nav { flex-direction: row; flex-wrap: nowrap; flex-shrink: 0; gap: 4px; padding: 8px 16px; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--ui-border); scrollbar-width: thin; }
   .model-settings-nav .app-tab { width: auto; white-space: nowrap; }
-  .model-settings-nav .app-tab[aria-selected="true"] { box-shadow: inset 0 -2px 0 var(--ui-accent); }
   .model-settings-footer { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 8px; padding: 8px 16px 12px; }
   .model-settings-footer-summary { flex-basis: auto; }
   .model-settings-actions { margin-inline-start: 0; }

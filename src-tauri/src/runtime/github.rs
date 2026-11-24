@@ -182,6 +182,7 @@ fn validate_github_response_url(response: &reqwest::Response) -> Result<(), AppE
 pub(super) fn http() -> reqwest::Client {
     reqwest::Client::builder()
         .user_agent("aiolm/0.2")
+        .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(30))
         .redirect(crate::http_policy::https_redirect_policy(
             trusted_github_host,

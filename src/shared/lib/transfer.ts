@@ -4,6 +4,36 @@ export interface DownloadSample {
   at: number;
 }
 
+/** Append a progress sample while keeping at least one anchor older than `windowMs`. */
+export function appendDownloadSample(
+  samples: readonly DownloadSample[],
+  received: number,
+  at: number,
+  windowMs = 4000,
+  maxSamples = 120,
+): DownloadSample[] {
+  if (!Number.isFinite(received) || received < 0 || !Number.isFinite(at)) {
+    return [...samples];
+  }
+  const last = samples[samples.length - 1];
+  if (last && received < last.received) {
+    return [{ received, at }];
+  }
+  const next =
+    last && at <= last.at
+      ? [...samples.slice(0, -1), { received: Math.max(last.received, received), at: last.at }]
+      : [...samples, { received, at }];
+  const cutoff = at - windowMs;
+  let keepFrom = 0;
+  while (keepFrom + 1 < next.length && next[keepFrom + 1]!.at <= cutoff) {
+    keepFrom += 1;
+  }
+  const pruned = keepFrom > 0 ? next.slice(keepFrom) : next;
+  if (pruned.length <= maxSamples) return pruned;
+  // Preserve the oldest anchor so rapid bursts never collapse elapsed time below minWindowMs.
+  return [pruned[0]!, ...pruned.slice(-(maxSamples - 1))];
+}
+
 /** Sliding-window speed over recent progress samples. Null while undetermined. */
 export function estimateDownloadSpeed(
   samples: readonly DownloadSample[],
@@ -12,19 +42,29 @@ export function estimateDownloadSpeed(
 ): number | null {
   if (samples.length < 2) return null;
   const latest = samples[samples.length - 1];
-  let earliest = samples[0];
-  if (!latest || !earliest) return null;
+  if (!latest) return null;
   const cutoff = latest.at - windowMs;
-  for (const sample of samples) {
-    if (sample.at >= cutoff) {
-      earliest = sample;
+  let anchor: DownloadSample | undefined;
+  for (let index = 0; index < samples.length - 1; index += 1) {
+    const sample = samples[index]!;
+    if (sample.at >= cutoff && latest.at - sample.at >= minWindowMs) {
+      anchor = sample;
       break;
     }
-    earliest = sample;
   }
-  const elapsedMs = latest.at - earliest.at;
+  if (!anchor) {
+    for (let index = samples.length - 2; index >= 0; index -= 1) {
+      const sample = samples[index]!;
+      if (latest.at - sample.at >= minWindowMs) {
+        anchor = sample;
+        break;
+      }
+    }
+  }
+  if (!anchor) return null;
+  const elapsedMs = latest.at - anchor.at;
   if (elapsedMs < minWindowMs) return null;
-  const deltaBytes = latest.received - earliest.received;
+  const deltaBytes = latest.received - anchor.received;
   if (!Number.isFinite(deltaBytes) || deltaBytes < 0) return null;
   return (deltaBytes / elapsedMs) * 1000;
 }

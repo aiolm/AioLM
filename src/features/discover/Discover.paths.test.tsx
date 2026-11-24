@@ -7,12 +7,14 @@ import { createTestStore } from "../../testing/appStore";
 import { defined } from "../../testing/assertDefined";
 import { PanelFeedbackActivity, PanelFeedbackIndicator, PanelFeedbackOutlet, PanelFeedbackProvider } from "../../shared/ui/PanelFeedback";
 import { getTaskSnapshot, removeTask } from "../../shared/state/taskRegistry";
+import { resetPendingDownloadsStoreForTests } from "../../shared/state/pendingDownloadsStore";
+import DownloadsCenter from "../../shared/ui/DownloadsCenter";
 import DiscoverPanel from "./Discover";
 import { useModelSettings, type ModelSettingsContext } from "../model-settings/ModelSettingsProvider";
 import { rememberExecution } from '../models/modelExecutionState';
 
 import { MODEL_CATALOG_CHANGED } from "../model-settings/useModelCatalog";
-import { useModelDownloadTask } from "../../shared/state/modelDownloadTask";
+import { modelDownloadTaskId, useModelDownloadTask } from "../../shared/state/modelDownloadTask";
 
 const match: { objectContaining: (value: Record<string, unknown>) => unknown } = expect;
 vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
@@ -38,8 +40,8 @@ async function clickDownload(name: string) {
 }
 
 describe("Discover path presentation", () => {
-  beforeEach(() => { vi.clearAllMocks(); vi.mocked(useModelSettings).mockReturnValue(null); vi.mocked(api.hfInstalledFiles).mockResolvedValue([]); vi.mocked(api.hfInstalledSnapshots).mockResolvedValue([]); localStorage.clear(); });
-  afterEach(() => { for (const t of getTaskSnapshot()) removeTask(t.id); });
+  beforeEach(() => { vi.clearAllMocks(); vi.mocked(useModelSettings).mockReturnValue(null); vi.mocked(api.hfInstalledFiles).mockResolvedValue([]); vi.mocked(api.hfInstalledSnapshots).mockResolvedValue([]); resetPendingDownloadsStoreForTests(); localStorage.clear(); });
+  afterEach(() => { resetPendingDownloadsStoreForTests(); for (const t of getTaskSnapshot()) removeTask(t.id); });
 
   it.each([false, true])("offers downloaded files for explicit configuration without changing the active model (projector: %s)", async (projector) => {
     const settings: ModelSettingsContext = { open: vi.fn(), suspended: false, resume: vi.fn(), getRequestConfig: (_id, cfg) => cfg, getRequestProfile: () => null };
@@ -58,7 +60,7 @@ describe("Discover path presentation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Search models" }));
     fireEvent.click(await screen.findByRole("button", { name: /owner\/model/ }));
     await clickDownload(`${projector ? "Download projector" : "Download"}: ${file}`);
-    fireEvent.click(await screen.findByRole("button", { name: "Configure and run" }));
+    fireEvent.click(await screen.findByRole("button", { name: `Configure and run: ${file}` }));
     expect(settings.open).toHaveBeenCalledWith(match.objectContaining({ target: { kind: "default" }, section: projector ? "adapters" : "model", config: match.objectContaining(projector
       ? { active_model: "models/current.gguf", mmproj: downloadedPath }
       : { active_model: downloadedPath }) }));
@@ -83,7 +85,7 @@ describe("Discover path presentation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Search models" }));
     fireEvent.click(await screen.findByRole("button", { name: /owner\/model/ }));
     await clickDownload("Download: model.Q4_K_M.gguf");
-    await waitFor(() => expect(api.hfDownloadModel).toHaveBeenCalledWith("owner/model", "model.Q4_K_M.gguf", raw));
+    await waitFor(() => expect(api.hfDownloadModel).toHaveBeenCalledWith("owner/model", "model.Q4_K_M.gguf", raw, undefined, undefined, expect.any(String)));
     expect(await screen.findByText(`Cannot write ${display}`)).toBeInTheDocument();
     expect(container.textContent).not.toContain('\\\\?\\');
     expect(store.cfg?.models_dir).toBe(raw);
@@ -120,7 +122,7 @@ describe("Discover path presentation", () => {
     expect(progressBar).toBeVisible();
     expect(progressBar.closest(".app-panel-notices")).toBeNull();
     expect(screen.queryByText(/notices/)).not.toBeInTheDocument();
-    expect(getTaskSnapshot().some((t) => t.id === "model-download" && t.state === "running")).toBe(true);
+    expect(getTaskSnapshot().some((t) => t.kind === "model-download" && t.state === "running")).toBe(true);
 
     resolveDownload!({ path: "models/model.gguf", repo_id: "owner/model", file_path: "model.gguf", size_bytes: 1000 });
   });
@@ -164,7 +166,7 @@ describe('Discover runtime journeys', () => {
     expect(store.cfg?.active_provider).toBe('llama.cpp');
   });
   beforeEach(() => {
-    vi.clearAllMocks(); localStorage.clear();
+    vi.clearAllMocks(); localStorage.clear(); resetPendingDownloadsStoreForTests();
     vi.mocked(useModelSettings).mockReturnValue(settingsContext());
     vi.mocked(api.hfInstalledSnapshots).mockResolvedValue([]);
     vi.mocked(api.hfInstalledFiles).mockResolvedValue([]);
@@ -174,7 +176,7 @@ describe('Discover runtime journeys', () => {
     vi.mocked(api.hfModelFiles).mockResolvedValue({ gguf_files: [], safetensors_files: [{ path: 'model.safetensors', size_bytes: 1000 }], has_root_safetensors: true });
     vi.mocked(api.hfDownloadSnapshot).mockResolvedValue(snapshot);
   });
-  afterEach(() => { for (const task of getTaskSnapshot()) removeTask(task.id); });
+  afterEach(() => { resetPendingDownloadsStoreForTests(); for (const task of getTaskSnapshot()) removeTask(task.id); });
 
   it.each(['llama.cpp', 'vllm', 'mlx-vlm'] as const)('opens on every repository format and preserves %s with its runtime through MLX setup', async provider => {
     const settings = settingsContext(); vi.mocked(useModelSettings).mockReturnValue(settings);
@@ -235,7 +237,7 @@ describe('Discover runtime journeys', () => {
     window.addEventListener(MODEL_CATALOG_CHANGED, catalogChanged);
     try {
       await act(async () => finish(snapshot));
-      expect(getTaskSnapshot().find(task => task.id === 'model-download')?.state).toBe('completed');
+      expect(getTaskSnapshot().find(task => task.kind === 'model-download')?.state).toBe('completed');
       expect(catalogChanged).toHaveBeenCalledOnce();
       expect(screen.queryByRole('button', { name: 'Configure and run' })).not.toBeInTheDocument();
       expect(screen.queryByText('Download complete')).not.toBeInTheDocument();
@@ -273,9 +275,10 @@ describe('Discover runtime journeys', () => {
     if (snapshot) vi.mocked(api.hfDownloadSnapshot).mockRejectedValueOnce(failure);
     else vi.mocked(api.hfDownloadModel).mockRejectedValueOnce(failure);
     const store = createTestStore();
-    render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
+    render(<I18nProvider initialLocale="en"><DownloadsCenter /><DiscoverPanel store={store} /></I18nProvider>);
+    fireEvent.click(await screen.findByTestId('downloads-center-trigger'));
     fireEvent.click(await screen.findByRole('button', { name: 'Resume: Interrupted model' }));
-    await waitFor(() => expect(getTaskSnapshot().find(task => task.id === 'model-download')?.state).toBe(state));
+    await waitFor(() => expect(getTaskSnapshot().find(task => task.kind === 'model-download')?.state).toBe(state));
     if (state === 'failed') expect(screen.getByRole('alert')).toHaveTextContent(failure.message);
     else expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(store.updateConfig).not.toHaveBeenCalled();
@@ -293,22 +296,24 @@ describe('Discover runtime journeys', () => {
     render(<I18nProvider initialLocale="en"><DownloadHarness /></I18nProvider>);
     fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
     await clickDownload('Download complete model folder');
+    await waitFor(() => expect(api.hfDownloadSnapshot).toHaveBeenCalledOnce());
+    const downloadId = defined(vi.mocked(api.hfDownloadSnapshot).mock.calls[0]?.[4]);
     const report = defined(vi.mocked(api.onModelDownloadProgress).mock.calls[0])[0];
-    act(() => report({ repo_id: 'owner/model', file_path: 'weights.safetensors', phase: 'downloading', received: 1024, total: 0 }));
+    act(() => report({ download_id: downloadId, repo_id: 'owner/model', file_path: 'weights.safetensors', phase: 'downloading', received: 1024, total: 0 }));
     const progress = screen.getByRole('progressbar', { name: 'Download progress' });
     const card = within(progress.closest<HTMLElement>('[role="status"]')!);
     expect(progress).not.toHaveAttribute('value');
     expect(card.getByText('1.0 KiB')).toBeVisible();
     expect(card.queryByText(/%|of 0 B/)).not.toBeInTheDocument();
     expect(card.getByRole('button', { name: 'Pause' })).toBeEnabled();
-    act(() => report({ repo_id: 'owner/model', file_path: 'weights.safetensors', phase: 'downloading', received: 1024, total: 4096 }));
+    act(() => report({ download_id: downloadId, repo_id: 'owner/model', file_path: 'weights.safetensors', phase: 'downloading', received: 1024, total: 4096 }));
     expect(progress).toHaveAttribute('value', '25');
     expect(card.getByText('25%')).toBeVisible();
     expect(card.getByText('1.0 KiB of 4.0 KiB')).toBeVisible();
     fireEvent.click(card.getByRole('button', { name: 'Pause' }));
-    await waitFor(() => expect(api.hfCancelDownload).toHaveBeenCalledOnce());
+    await waitFor(() => expect(api.hfCancelDownload).toHaveBeenCalledWith(downloadId));
     await act(async () => rejectDownload(new IpcError('cancelled', 'model download cancelled')));
-    expect(getTaskSnapshot().find(task => task.id === 'model-download')?.state).toBe('cancelled');
+    expect(getTaskSnapshot().find(task => task.kind === 'model-download')?.state).toBe('cancelled');
   });
 
   it('retires pending GGUF responses when the user switches to MLX search', async () => {
@@ -345,7 +350,7 @@ describe('Discover runtime journeys', () => {
     await waitFor(() => expect(api.hfCancelDownload).toHaveBeenCalledOnce());
     expect(download).toBeDisabled();
     await act(async () => rejectDownload(new IpcError('cancelled', 'Transfer interrupted by request')));
-    expect(getTaskSnapshot().find(task => task.id === 'model-download')?.state).toBe('cancelled');
+    expect(getTaskSnapshot().find(task => task.kind === 'model-download')?.state).toBe('cancelled');
     await waitFor(() => expect(download).toBeEnabled()); fireEvent.click(download);
     await waitFor(() => expect(api.hfDownloadSnapshot).toHaveBeenCalledTimes(2));
   });
@@ -371,8 +376,9 @@ describe('Discover runtime journeys', () => {
     await waitFor(() => expect(api.hfDownloadSnapshot).toHaveBeenCalledTimes(2));
     expect(screen.queryByText('Download complete')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Configure and run' })).not.toBeInTheDocument();
+    const retryDownloadId = defined(vi.mocked(api.hfDownloadSnapshot).mock.calls[1]?.[4]);
     await act(async () => rejectRetry(failure));
-    expect(getTaskSnapshot().find(task => task.id === 'model-download')?.state).toBe(state);
+    expect(getTaskSnapshot().find(task => task.id === modelDownloadTaskId(retryDownloadId))?.state).toBe(state);
     expect(screen.queryByText('Download complete')).not.toBeInTheDocument();
     if (state === 'failed') expect(screen.getByText(failure.message)).toBeVisible();
     expect(store.updateConfig).not.toHaveBeenCalled();
@@ -402,8 +408,14 @@ describe('Discover runtime journeys', () => {
     expect(checkbox).not.toBeChecked();
     if (include) fireEvent.click(checkbox);
     await clickDownload('Download: model.gguf');
-    await waitFor(() => expect(api.hfDownloadModel).toHaveBeenCalledWith(...(include ? [repo.id, 'model.gguf', 'models', true] : [repo.id, 'model.gguf', 'models'])));
-    fireEvent.click(await screen.findByRole('button', { name: 'Configure and run' }));
+    await waitFor(() => {
+      if (include) {
+        expect(api.hfDownloadModel).toHaveBeenCalledWith(repo.id, 'model.gguf', 'models', true, undefined, expect.any(String));
+      } else {
+        expect(api.hfDownloadModel).toHaveBeenCalledWith(repo.id, 'model.gguf', 'models', undefined, undefined, expect.any(String));
+      }
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Configure and run: model.gguf' }));
     expect(settings.open).toHaveBeenCalledWith(match.objectContaining({ config: match.objectContaining({ active_provider: provider, active_runtime: `synthetic-${provider}-runtime`, active_model: 'models/model.gguf' }) }));
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
@@ -433,8 +445,8 @@ describe('Discover runtime journeys', () => {
     expect(screen.queryByText(second)).not.toBeInTheDocument();
     await clickDownload('Download: model.gguf');
     await waitFor(() => expect(api.hfDownloadModel).toHaveBeenCalledOnce());
-    fireEvent.click(await screen.findByRole('button', { name: 'Configure and run' }));
-    expect(api.hfDownloadModel).toHaveBeenCalledWith(repo.id, first, 'models');
+    fireEvent.click(await screen.findByRole('button', { name: 'Configure and run: model.gguf' }));
+    expect(api.hfDownloadModel).toHaveBeenCalledWith(repo.id, first, 'models', undefined, undefined, expect.any(String));
     expect(await screen.findByRole('button', { name: 'Installed: model.gguf' })).toBeDisabled();
     expect(settings.open).toHaveBeenCalledWith(match.objectContaining({ config: match.objectContaining({ active_model: `models/${first}` }) }));
   });
@@ -462,12 +474,13 @@ describe('Discover runtime journeys', () => {
     fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
     await clickDownload('Download: model.gguf');
     expect(await screen.findByText('Incomplete model · 1 of 2 files missing')).toBeVisible();
-    expect(screen.queryByRole('button', { name: 'Configure and run' })).not.toBeInTheDocument();
-    expect(getTaskSnapshot().find(task => task.id === 'model-download')?.state).toBe(state);
+    expect(screen.queryByRole('button', { name: /^Configure and run/ })).not.toBeInTheDocument();
+    const firstDownloadId = defined(vi.mocked(api.hfDownloadModel).mock.calls[0]?.[5]);
+    expect(getTaskSnapshot().find(task => task.id === modelDownloadTaskId(firstDownloadId))?.state).toBe(state);
     await clickDownload('Download: model.gguf');
-    expect(await screen.findByRole('button', { name: 'Configure and run' })).toBeEnabled();
+    expect(await screen.findByRole('button', { name: 'Configure and run: model.gguf' })).toBeEnabled();
     expect(api.hfDownloadModel).toHaveBeenCalledTimes(2);
-    expect(api.hfDownloadModel).toHaveBeenLastCalledWith(repo.id, first, 'models');
+    expect(api.hfDownloadModel).toHaveBeenLastCalledWith(repo.id, first, 'models', undefined, undefined, expect.any(String));
     expect(await screen.findByRole('button', { name: 'Installed: model.gguf' })).toBeDisabled();
   });
 
@@ -498,20 +511,20 @@ describe('Discover runtime journeys', () => {
     store.status = { state: 'running' };
     await act(async () => finish({ path: 'models/model.gguf', file_path: 'model.gguf', repo_id: repo.id, size_bytes: 10 }));
     expect(store.updateConfig).not.toHaveBeenCalled();
-    expect(getTaskSnapshot().find(task => task.id === 'model-download')?.state).toBe('completed');
+    expect(getTaskSnapshot().find(task => task.kind === 'model-download')?.state).toBe('completed');
   });
 });
 
 describe('Discover across every repository format', () => {
   beforeEach(() => {
-    vi.clearAllMocks(); localStorage.clear();
+    vi.clearAllMocks(); localStorage.clear(); resetPendingDownloadsStoreForTests();
     vi.mocked(useModelSettings).mockReturnValue(settingsContext());
     vi.mocked(api.hfInstalledSnapshots).mockResolvedValue([]);
     vi.mocked(api.hfInstalledFiles).mockResolvedValue([]);
     vi.mocked(api.hfSearchModels).mockResolvedValue([repo]);
     vi.mocked(api.hfDownloadSnapshot).mockResolvedValue(snapshot);
   });
-  afterEach(() => { for (const task of getTaskSnapshot()) removeTask(task.id); });
+  afterEach(() => { resetPendingDownloadsStoreForTests(); for (const task of getTaskSnapshot()) removeTask(task.id); });
 
   const mixed: api.HfRepositoryInspection = {
     gguf_files: [{ path: 'model.Q4_K_M.gguf', size_bytes: 10, is_mmproj: false, download_url: '' }],
@@ -577,7 +590,7 @@ describe('Discover across every repository format', () => {
     fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
     const download = await screen.findByRole('button', { name: 'Download complete model folder' });
     await waitFor(() => expect(download).toBeEnabled()); fireEvent.click(download);
-    await waitFor(() => expect(api.hfDownloadSnapshot).toHaveBeenCalledWith(repo.id, 'models'));
+    await waitFor(() => expect(api.hfDownloadSnapshot).toHaveBeenCalledWith(repo.id, 'models', undefined, undefined, expect.any(String)));
     expect(await screen.findByRole('button', { name: 'Configure and run' })).toBeVisible();
     expect(store.updateConfig).not.toHaveBeenCalled();
     expect(store.cfg?.active_provider).toBe('llama.cpp');
@@ -633,7 +646,8 @@ describe('Discover across every repository format', () => {
     vi.mocked(api.hfDownloadSnapshot).mockRejectedValueOnce(new Error('Snapshot transfer failed'));
     vi.mocked(api.hfModelFiles).mockResolvedValueOnce(mixed);
 
-    render(<I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore()} /></I18nProvider>);
+    render(<I18nProvider initialLocale="en"><DownloadsCenter /><DiscoverPanel store={createTestStore()} /></I18nProvider>);
+    fireEvent.click(await screen.findByTestId('downloads-center-trigger'));
     const discard = await screen.findByRole('button', { name: 'Discard: model.gguf' });
     const resume = screen.getByRole('button', { name: 'Resume: model.gguf' });
     fireEvent.click(discard);
@@ -649,6 +663,11 @@ describe('Discover across every repository format', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
     await clickDownload('Download complete model folder');
-    expect(await screen.findByText('Snapshot transfer failed')).toBeVisible();
+    const discoverPanel = defined(
+      screen
+        .getByRole('heading', { name: 'Find models on Hugging Face' })
+        .closest<HTMLElement>('.discover-panel'),
+    );
+    expect(await within(discoverPanel).findByText('Snapshot transfer failed')).toBeVisible();
   });
 });

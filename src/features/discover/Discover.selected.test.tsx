@@ -6,6 +6,7 @@ import { I18nProvider } from '../../shared/i18n/i18n';
 import { createTestStore } from '../../testing/appStore';
 import { defined } from '../../testing/assertDefined';
 import { getTaskSnapshot, registerTask, removeTask } from '../../shared/state/taskRegistry';
+import { resetPendingDownloadsStoreForTests } from '../../shared/state/pendingDownloadsStore';
 import { useModelSettings, type ModelSettingsContext } from '../model-settings/ModelSettingsProvider';
 import DiscoverPanel from './Discover';
 
@@ -52,7 +53,7 @@ function row(path: string) {
 
 let settings: ModelSettingsContext;
 beforeEach(() => {
-  vi.clearAllMocks(); localStorage.clear();
+  vi.clearAllMocks(); localStorage.clear(); resetPendingDownloadsStoreForTests();
   settings = { open: vi.fn(), suspended: false, resume: vi.fn(), getRequestConfig: (_id, cfg) => cfg, getRequestProfile: () => null };
   vi.mocked(useModelSettings).mockReturnValue(settings);
   vi.mocked(api.hfSearchModels).mockResolvedValue([repo]);
@@ -61,7 +62,7 @@ beforeEach(() => {
   vi.mocked(api.hfInstalledSnapshots).mockResolvedValue([]);
   vi.mocked(api.hfDownloadSnapshot).mockResolvedValue(artifact);
 });
-afterEach(() => { for (const task of getTaskSnapshot()) removeTask(task.id); });
+afterEach(() => { resetPendingDownloadsStoreForTests(); for (const task of getTaskSnapshot()) removeTask(task.id); });
 
 describe('selected Safetensors model bundles', () => {
   it.each(['All formats', 'HF Safetensors', 'MLX Safetensors'])('offers separate standalone and folder models under %s with one accurately sized split choice', async format => {
@@ -93,7 +94,7 @@ describe('selected Safetensors model bundles', () => {
     fireEvent.click(await screen.findByRole('button', { name: /example\/variants/ }));
     await clickDownload(`Download: ${display}`);
     const configure = await screen.findByRole('button', { name: `Configure and run: ${display}` });
-    expect(api.hfDownloadSnapshot).toHaveBeenCalledExactlyOnceWith(repo.id, 'models', selectedFile);
+    expect(api.hfDownloadSnapshot).toHaveBeenCalledExactlyOnceWith(repo.id, 'models', selectedFile, undefined, expect.any(String));
     expect(api.hfDownloadModel).not.toHaveBeenCalled();
     expect(settings.open).not.toHaveBeenCalled();
     expect(store.updateConfig).not.toHaveBeenCalled();
@@ -124,7 +125,7 @@ describe('selected Safetensors model bundles', () => {
     expect(screen.getByRole('button', { name: 'Download: other.safetensors' })).toBeDisabled();
     fireEvent.click(configure);
     expect(settings.open).toHaveBeenCalledWith(match.objectContaining({ config: match.objectContaining({ active_model: installed.path }) }));
-    expect(api.hfDownloadSnapshot).toHaveBeenCalledExactlyOnceWith(repo.id, 'models', selected);
+    expect(api.hfDownloadSnapshot).toHaveBeenCalledExactlyOnceWith(repo.id, 'models', selected, undefined, expect.any(String));
   });
 
   it('groups an older noncanonical incomplete index selection into one retry without claiming unrelated weights', async () => {
@@ -138,7 +139,7 @@ describe('selected Safetensors model bundles', () => {
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore()} /></I18nProvider>);
     fireEvent.click(await screen.findByRole('button', { name: /example\/variants/ }));
     await clickDownload(`Retry: ${defined(members[0])}`);
-    expect(api.hfDownloadSnapshot).toHaveBeenCalledExactlyOnceWith(repo.id, 'models', defined(members[0]));
+    expect(api.hfDownloadSnapshot).toHaveBeenCalledExactlyOnceWith(repo.id, 'models', defined(members[0]), undefined, expect.any(String));
     expect(screen.queryByRole('button', { name: /Retry: model-b/ })).not.toBeInTheDocument();
     expect(row('other.safetensors').queryByRole('button', { name: /Retry/ })).not.toBeInTheDocument();
   });
@@ -175,7 +176,7 @@ describe('selected Safetensors model bundles', () => {
     expect(row('model.safetensors').getByRole('button', { name: 'Download: model.safetensors' })).toBeEnabled();
     expect(screen.queryByRole('button', { name: 'Configure and run' })).not.toBeInTheDocument();
     await clickDownload('Download complete model folder');
-    expect(api.hfDownloadSnapshot).toHaveBeenCalledExactlyOnceWith(repo.id, 'models');
+    expect(api.hfDownloadSnapshot).toHaveBeenCalledExactlyOnceWith(repo.id, 'models', undefined, undefined, expect.any(String));
   });
 
   it('does not mark individual model choices installed from a whole snapshot', async () => {
@@ -192,7 +193,7 @@ describe('selected Safetensors model bundles', () => {
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore()} /></I18nProvider>);
     fireEvent.click(await screen.findByRole('button', { name: /example\/variants/ }));
     await clickDownload('Download: 4bit/model.safetensors');
-    expect(api.hfDownloadSnapshot).toHaveBeenCalledWith(repo.id, 'models', '4bit/model-00001-of-00002.safetensors');
+    expect(api.hfDownloadSnapshot).toHaveBeenCalledWith(repo.id, 'models', '4bit/model-00001-of-00002.safetensors', undefined, expect.any(String));
     expect(screen.queryByRole('button', { name: 'Download complete model folder' })).not.toBeInTheDocument();
   });
 
@@ -214,7 +215,7 @@ describe('selected Safetensors model bundles', () => {
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
     fireEvent.click(await screen.findByRole('button', { name: /example\/variants/ }));
     await clickDownload('Download: 4bit/model.safetensors');
-    await waitFor(() => expect(getTaskSnapshot().find(task => task.id === 'model-download')?.state).toBe('completed'));
+    await waitFor(() => expect(getTaskSnapshot().find(task => task.kind === 'model-download')?.state).toBe('completed'));
     expect(screen.queryByRole('button', { name: /Configure/ })).not.toBeInTheDocument();
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
@@ -228,16 +229,17 @@ describe('selected Safetensors model bundles', () => {
     const view = render(page());
     fireEvent.click(await screen.findByRole('button', { name: /example\/variants/ }));
     await clickDownload('Download: 4bit/model.safetensors');
+    const ownTaskId = defined(getTaskSnapshot().find(task => task.kind === 'model-download')).id;
     const replacementCancel = vi.fn();
     if (change === 'repository') fireEvent.click(screen.getByRole('button', { name: /example\/other/ }));
     else if (change === 'search') fireEvent.click(screen.getByRole('button', { name: 'Search models' }));
     else if (change === 'destination') { store.cfg!.models_dir = 'models/elsewhere'; view.rerender(page()); }
-    else await act(() => registerTask({ id: 'model-download', kind: 'model-download', label: 'replacement', interruptible: true, cancel: replacementCancel }));
+    else await act(() => registerTask({ id: ownTaskId, kind: 'model-download', label: 'replacement', interruptible: true, cancel: replacementCancel }));
     await act(async () => finish(artifact));
     expect(screen.queryByRole('button', { name: /Configure/ })).not.toBeInTheDocument();
     expect(store.updateConfig).not.toHaveBeenCalled();
     expect(settings.open).not.toHaveBeenCalled();
-    if (change === 'replacement') expect(getTaskSnapshot().find(task => task.id === 'model-download')).toMatchObject({ state: 'running', cancel: replacementCancel });
+    if (change === 'replacement') expect(getTaskSnapshot().find(task => task.id === ownTaskId)).toMatchObject({ state: 'running', cancel: replacementCancel });
   });
 
   it('refreshes an interrupted selection for retry without marking another model or the whole snapshot incomplete', async () => {
@@ -253,7 +255,7 @@ describe('selected Safetensors model bundles', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
     installed = [{ ...artifact, incomplete: true, missing: ['tokenizer.json'] }];
     await act(async () => reject(new IpcError('cancelled', 'Transfer interrupted by request')));
-    expect(getTaskSnapshot().find(task => task.id === 'model-download')?.state).toBe('cancelled');
+    expect(getTaskSnapshot().find(task => task.kind === 'model-download')?.state).toBe('cancelled');
     await waitFor(() => expect(row('4bit/model.safetensors').getByRole('button', { name: 'Retry: 4bit/model.safetensors' })).toBeEnabled());
     expect(row('4bit/model.safetensors').queryByRole('button', { name: /Configure/ })).not.toBeInTheDocument();
     expect(row('8bit/model.safetensors').getByRole('button', { name: 'Download: 8bit/model.safetensors' })).toBeEnabled();
@@ -277,14 +279,14 @@ describe('selected Safetensors model bundles', () => {
     if (state === 'cancelled') {
       fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
       await waitFor(() => expect(api.hfCancelDownload).toHaveBeenCalledOnce());
-      expect(screen.getByRole('button', { name: 'Download: 8bit/model.safetensors' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Download: 8bit/model.safetensors' })).toBeEnabled();
     }
     await act(async () => reject(failure));
-    expect(getTaskSnapshot().find(task => task.id === 'model-download')?.state).toBe(state);
+    expect(getTaskSnapshot().find(task => task.kind === 'model-download')?.state).toBe(state);
     expect(screen.queryByRole('button', { name: /Configure/ })).not.toBeInTheDocument();
     expect(store.updateConfig).not.toHaveBeenCalled();
     await clickDownload('Download: 4bit/model.safetensors');
-    expect(api.hfDownloadSnapshot).toHaveBeenNthCalledWith(2, repo.id, 'models', '4bit/model-00001-of-00002.safetensors');
+    expect(api.hfDownloadSnapshot).toHaveBeenNthCalledWith(2, repo.id, 'models', '4bit/model-00001-of-00002.safetensors', undefined, expect.any(String));
     expect(await screen.findByRole('button', { name: 'Configure and run: 4bit/model.safetensors' })).toBeVisible();
     expect(row('8bit/model.safetensors').queryByRole('button', { name: /Configure/ })).not.toBeInTheDocument();
   });

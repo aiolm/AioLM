@@ -1,7 +1,6 @@
 import { useModelName } from '../shared/ui/ModelName';
 import ModelIcon from '../shared/ui/ModelIcon';
 import StableLabel from "../shared/ui/StableLabel";
-import StatusBadge from "../shared/ui/StatusBadge";
 import { version } from '../../package.json';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { applyTheme, persistThemeMode, subscribeToSystemTheme } from "../shared/config/theme";
@@ -15,16 +14,19 @@ import { useAppStore } from "../shared/state/store";
 import EmptyState from "../shared/ui/EmptyState";
 import FeedbackBanner from "../shared/ui/FeedbackBanner";
 import ConfirmDialog from "../shared/ui/ConfirmDialog";
+import ActivityCenter from "../shared/ui/ActivityCenter";
+import DownloadsCenter from "../shared/ui/DownloadsCenter";
+import LaunchStatusCenter from "../shared/ui/LaunchStatusCenter";
 import TaskStrip from "../shared/ui/TaskStrip";
 import { TaskCancellationProvider } from "../shared/ui/TaskCancellation";
-import { getTaskSnapshot, useTasks, type AppTask } from "../shared/state/taskRegistry";
+import { getTaskSnapshot, type AppTask } from "../shared/state/taskRegistry";
 import { useModelDownloadTask } from "../shared/state/modelDownloadTask";
 import { PanelBoundary } from "../shared/ui/ErrorBoundary";
 import { AioMark } from "../shared/ui/AppIcons";
 import { navigationGroups, navigationText, type ViewId } from "./navigation";
 import InitialSurface, { SurfaceLoading } from "../shared/ui/InitialSurface";
 import type { SetupChoices } from "../features/onboarding/Onboarding";
-import PanelFeedback, { ActivePanelContext, PanelFeedbackProvider, PanelFeedbackOutlet, PanelFeedbackIndicator, PanelFeedbackActivity, usePanelFeedbackSummary } from "../shared/ui/PanelFeedback";
+import PanelFeedback, { ActivePanelContext, PanelFeedbackProvider, PanelFeedbackOutlet } from "../shared/ui/PanelFeedback";
 
 import { detectLocale, useI18n } from "../shared/i18n/i18n";
 import RuntimeSelectionLabel from '../shared/ui/RuntimeSelectionLabel';
@@ -33,6 +35,7 @@ import { loadPreferences, resetPreferences, savePreferences, type AppPreferences
 import { applyTypography } from "../shared/config/typography";
 import { normalizeDisplayPath, normalizeDisplayText } from "../shared/lib/displayPaths";
 import { DraftGuardProvider } from '../shared/state/draftGuard';
+import { previewExecution } from '../features/models/modelExecutionState';
 import { useExecutionStore } from '../features/models/useExecutionStore';
 import { executionText } from '../shared/i18n/executionI18n';
 import type { ExecutionSection } from '../features/models/ModelWorkspace';
@@ -67,25 +70,6 @@ function LazyPanel({ children, title }: { children: React.ReactNode; title: stri
  * unable to survive navigation (`interruptible: false`); see taskRegistry.ts. */
 export function findTaskBlockingTabLeave(tasks: AppTask[]): AppTask | undefined {
   return tasks.find((task) => (task.state === "running" || task.state === "cancelling") && !task.interruptible);
-}
-
-/** The only shell part that follows the task registry, so a download's progress
- * events re-render this summary instead of the shell and every mounted panel. */
-function TaskActivity({ hasActivity, title, attentionMessage, globalError, globalAttentionKeys = [], children }: { hasActivity: boolean; title: string; attentionMessage: string; globalError: boolean; globalAttentionKeys?: readonly string[]; children: React.ReactNode }) {
-  const tasks = useTasks().filter(task => task.kind !== "model-launch");
-  const failures = tasks.filter(task => task.state === "failed" || task.state === "crashed");
-  const attentionKeys = useMemo(
-    () => [...failures.map(task => JSON.stringify([task.id, task.startedAt])), ...globalAttentionKeys],
-    [failures, globalAttentionKeys],
-  );
-  const activeCount = tasks.filter(task => task.state === "running" || task.state === "cancelling").length;
-  const { count: noticeCount, attention: noticeAttention } = usePanelFeedbackSummary();
-  const hasProblems = globalError || failures.length > 0 || noticeAttention > 0;
-  const badgeCount = activeCount + failures.length + noticeCount + (globalError && noticeCount === 0 ? 1 : 0);
-  return <PanelFeedbackActivity hasActivity={tasks.length > 0 || hasActivity} attentionKeys={attentionKeys}>
-    <summary><span>{title}</span><span className="app-activity-count" aria-live="polite">{badgeCount}</span>{hasProblems && badgeCount > 0 ? <PanelFeedbackIndicator message={attentionMessage} globalError={globalError || failures.length > 0} /> : <PanelFeedbackIndicator message={attentionMessage} globalError={false} />}</summary>
-    <div className="app-activity-content">{children}</div>
-  </PanelFeedbackActivity>;
 }
 
 export default function App() {
@@ -334,6 +318,31 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   const openModels = () => { modelSettings.open({ target: { kind: 'default' }, section: 'model' }); };
   const openTuning = () => { navigate("tuning"); };
   const openProfiles = () => { navigate("profiles"); };
+  const configureDownloadedModel = ({ path, projector }: { path: string; projector?: boolean }) => {
+    const cfg = store.getConfig();
+    if (!cfg) return;
+    const config = projector
+      ? { ...cfg, mmproj: path }
+      : { ...cfg, ...previewExecution(cfg, path), active_model: path };
+    modelSettings.open({
+      target: { kind: 'default' },
+      config,
+      section: projector ? 'adapters' : 'model',
+    });
+  };
+  const startDefaultSession = async () => {
+    const cfg = store.getConfig();
+    if (!cfg) return;
+    if (!cfg.active_model.trim()) {
+      openModels();
+      return;
+    }
+    try {
+      await store.start();
+    } catch {
+      // The store publishes an actionable error banner; keep the shell mounted.
+    }
+  };
   const stopDefaultSession = async () => {
     try {
       if (serverState === "running" || serverState === "starting") await store.stop();
@@ -356,6 +365,9 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   }, [locale, serverState, liveModelName]);
   const runtimeConfig = liveModel ? { ...store.cfg, ...store.status.execution, ...(store.status.engine ? { active_provider: store.status.engine.provider, active_runtime: store.status.engine.runtime_id } : {}) } : store.cfg;
   const backendLabel = providerDisplayName(providerOf(runtimeConfig ?? {}));
+  const isStopAction = serverState === "running" || serverState === "starting";
+  const isStoppingOrBusy = serverState === "stopping" || (serverBusy && !isStopAction);
+  const serverActionLabel = isStopAction ? t("action.stop") : isStoppingOrBusy ? t("status.working") : t("action.start");
 
 
   const brand = <div className="aiolm-brand"><AioMark /><strong>AioLM</strong></div>;
@@ -389,25 +401,41 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
       <header className="aiolm-header">
         <div className="aiolm-heading"><button ref={menuButton} type="button" className="app-icon-button aiolm-menu-trigger" aria-label={copy.openMenu} aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}><svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7"><path d="M4 6h16M4 12h16M4 18h16" /></svg></button><span className="aiolm-location">{title}</span></div>
         <div className="aiolm-runtime-context" role="group" aria-label={modelCopy.defaultScope}>
-          <span className="aiolm-context-scope">{modelCopy.defaultScope}</span>
-          <button type="button" className="app-button app-button--ghost aiolm-context-model" aria-label={liveModel ? `${modelCopy.choose}: ${liveModelName}` : modelCopy.choose} title={liveModel ? normalizeDisplayPath(liveModel) : modelCopy.choose} onClick={openModels}>{liveModel ? <ModelIcon model={liveModel} /> : <span className="aiolm-context-dot" aria-hidden="true" />}<span className="aiolm-context-label">{liveModelName || modelCopy.choose}</span><svg aria-hidden="true" className="aiolm-context-chevron" viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="m6 8 4 4 4-4" /></svg></button>
-          <button type="button" className="app-button app-button--ghost aiolm-context-runtime" aria-label={modelCopy.settings} title={liveModel ? backendLabel : modelCopy.settings} onClick={() => modelSettings.open({ target: { kind: 'default' }, section: 'runtime' })}><span className="aiolm-context-label"><RuntimeSelectionLabel config={runtimeConfig} separator=" · " /></span><svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg></button>
+          <LaunchStatusCenter
+            statusLabel={t(modelStatusKey(serverState))}
+            statusLabels={serverStatusLabels}
+            statusTone={serverState === 'running' ? 'success' : serverState === 'failed' || serverState === 'crashed' ? 'danger' : serverState === 'starting' || serverState === 'stopping' ? 'warning' : 'neutral'}
+            serverStarting={serverState === 'starting'}
+          />
+          <button type="button" className="app-button app-button--ghost aiolm-context-model" aria-label={liveModel ? `${modelCopy.choose}: ${liveModelName}` : modelCopy.choose} title={liveModel ? normalizeDisplayPath(liveModel) : modelCopy.choose} onClick={openModels}>{liveModel && <ModelIcon model={liveModel} />}<span className="aiolm-context-label">{liveModelName || modelCopy.choose}</span><svg aria-hidden="true" className="aiolm-context-chevron" viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="m6 8 4 4 4-4" /></svg></button>
+          <button type="button" className="app-button app-button--ghost aiolm-context-runtime" aria-label={modelCopy.settings} title={liveModel ? backendLabel : modelCopy.settings} onClick={() => modelSettings.open({ target: { kind: 'default' }, section: 'runtime' })}><span className="aiolm-context-label"><RuntimeSelectionLabel config={runtimeConfig} separator=" · " /></span><svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg></button>
+          <button
+            type="button"
+            className="app-button app-button--secondary aiolm-context-action"
+            disabled={!store.cfg || isStoppingOrBusy}
+            onClick={() => void (isStopAction ? stopDefaultSession() : startDefaultSession())}
+          >
+            <StableLabel value={serverActionLabel} labels={[t("action.start"), t("action.stop"), t("status.working")]} />
+          </button>
         </div>
-        <div className="aiolm-server"><StatusBadge className="aiolm-status" role="status" label={t(modelStatusKey(serverState))} labels={serverStatusLabels} tone={serverState === 'running' ? 'success' : serverState === 'failed' || serverState === 'crashed' ? 'danger' : serverState === 'starting' || serverState === 'stopping' ? 'warning' : 'neutral'} />{(serverState === 'running' || serverState === 'starting' || serverBusy) && <button type="button" className="app-button app-button--secondary" disabled={!store.cfg || (serverBusy && serverState !== "starting")} onClick={() => void stopDefaultSession()}><StableLabel value={serverState === "running" || serverState === "starting" ? t("action.stop") : t("status.working")} labels={[t("action.stop"), t("status.working")]} /></button>}</div>
+        <div className="aiolm-header-end">
+          <div className="aiolm-header-utilities">
+            <DownloadsCenter onConfigureModel={configureDownloadedModel} />
+            <ActivityCenter hasActivity={hasError || store.bootState === 'native-unavailable'} title={t("ui.taskStripTitle")} attentionMessage={t("error.attention")} globalError={hasError} globalAttentionKeys={errorText ? [errorText] : undefined}>
+              <PanelFeedback>
+                {store.bootState === "native-unavailable" && view !== "chat" && <FeedbackBanner tone="warning" title={t("native.unavailable")}>{t("native.message")}</FeedbackBanner>}
+                {hasError && store.bootState !== "native-unavailable" && <FeedbackBanner tone="error" title={t("error.attention")} onDismiss={dismissErrors}
+                  action={overrideKey ? { label: t("ui.verificationOverride"), disabled: overrideBusy, onClick: acceptOverride } : undefined}><RuntimeFailureDetails error={errorText} log={failureLog} /></FeedbackBanner>}
+                {overrideAccepted && !hasError && <FeedbackBanner tone="success" onDismiss={() => setOverrideAccepted(false)}>{t("ui.verificationOverrideDone")}</FeedbackBanner>}
+              </PanelFeedback>
+              <TaskStrip excludeKinds={["model-launch", "model-download"]} />
+              <PanelFeedbackOutlet />
+            </ActivityCenter>
+          </div>
+        </div>
       </header>
       <div className="app-main-area">
         <AppUpdateNotice onOpenSettings={() => { const requestUpdate = () => setSettingsUpdateRequest(current => current + 1); if (navigate("settings", requestUpdate)) requestUpdate(); }} />
-        <TaskStrip launchesOnly />
-        <TaskActivity hasActivity={hasError || store.bootState === 'native-unavailable'} title={t("ui.taskStripTitle")} attentionMessage={t("error.attention")} globalError={hasError} globalAttentionKeys={errorText ? [errorText] : undefined}>
-        <PanelFeedback>
-          {store.bootState === "native-unavailable" && view !== "chat" && <FeedbackBanner tone="warning" title={t("native.unavailable")}>{t("native.message")}</FeedbackBanner>}
-          {hasError && store.bootState !== "native-unavailable" && <FeedbackBanner tone="error" title={t("error.attention")} onDismiss={dismissErrors}
-            action={overrideKey ? { label: t("ui.verificationOverride"), disabled: overrideBusy, onClick: acceptOverride } : undefined}><RuntimeFailureDetails error={errorText} log={failureLog} /></FeedbackBanner>}
-          {overrideAccepted && !hasError && <FeedbackBanner tone="success" onDismiss={() => setOverrideAccepted(false)}>{t("ui.verificationOverrideDone")}</FeedbackBanner>}
-        </PanelFeedback>
-        <TaskStrip />
-        <PanelFeedbackOutlet />
-        </TaskActivity>
         <main id="main-content" className="app-main" tabIndex={-1}>
           {panel("chat", store.bootState === "native-unavailable" ? <div className="app-page-scroll app-runtime-empty"><h1 className="sr-only">{labelFor("chat")}</h1><EmptyState title={t("native.unavailable")} description={t("native.message")} /></div> : <ChatPanel store={store} preferences={preferences} active={view === "chat"} onOpenModels={openModels} onDiscoverModels={() => { navigate('discover'); }} />)}
           {panel("projects", store.cfg ? <ProjectsPanel store={store} onOpenTuning={openTuning} /> : store.bootState === "native-unavailable" ? <div className="app-page-scroll app-runtime-empty"><h1 className="sr-only">{labelFor("projects")}</h1><EmptyState title={t("native.unavailable")} description={t("native.message")} /></div> : <PanelLoading title={labelFor("projects")} />)}

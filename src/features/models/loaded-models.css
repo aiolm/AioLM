@@ -1,13 +1,14 @@
 /* Named sessions above the library: one bordered list of divider rows, not a card of cards. */
-.loaded-models { display: grid; gap: 12px; margin-bottom: 24px; min-width: 0; }
+.loaded-models { display: grid; gap: 12px; margin-bottom: 16px; min-width: 0; }
 .sessions-list { display: grid; gap: 0; padding: 0; }
 .sessions-list > .session-entry { padding: 12px 16px; border: 0; border-radius: 0; background: transparent; }
 .sessions-list > .session-entry + .session-entry { border-top: 1px solid var(--ui-border); }
 .sessions-list > .session-entry.is-selected { box-shadow: inset 3px 0 0 var(--ui-accent-solid); color: inherit; }
+.sessions-list > .session-entry.is-selected::before { display: none; }
 .session-entry .app-status-badge { padding: 0; border: 0; background: transparent; font-size: var(--ui-text-support); font-weight: 500; }
 .session-entry { display: grid; gap: 8px; min-width: 0; }
 .session-entry-main { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; min-width: 0; }
-.session-entry-name { display: flex; gap: 8px; min-width: 0; }
+.session-entry-name { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 0; }
 button.session-entry-name { cursor: pointer; }
 .session-entry-chevron { flex: 0 0 16px; color: var(--ui-muted); transition: transform 150ms ease; }
 .session-entry-actions { display: flex; grid-column: 1 / -1; flex-wrap: wrap; gap: 8px; }
@@ -28,7 +29,12 @@ button.session-entry-name { cursor: pointer; }
 .loaded-models-option { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .loaded-models-option-title { flex: 1 0 100%; font-weight: 500; }
 @container workspace (min-width: 820px) {
-  .session-entry-main { grid-template-columns: minmax(0, 1fr) auto minmax(0, 12rem) auto; gap: 16px; }
-  .session-entry-runtime, .session-entry-actions { grid-column: auto; }
-  .session-entry-actions { justify-content: flex-end; }
+  .sessions-list { grid-template-columns: minmax(0, 1fr) max-content minmax(0, 12rem) max-content; column-gap: 16px; }
+  .sessions-list > .session-entry { grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr) max-content minmax(0, 12rem) max-content; grid-template-columns: subgrid; column-gap: 16px; }
+  .session-entry-main { grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr) max-content minmax(0, 12rem) max-content; grid-template-columns: subgrid; column-gap: 16px; }
+  .session-entry-name { grid-column: 1; }
+  .session-entry-main > .app-status-badge { grid-column: 2; }
+  .session-entry-runtime { grid-column: 3; }
+  .session-entry-actions { grid-column: 4; justify-content: flex-end; }
+  .session-entry-error, .session-entry-details { grid-column: 1 / -1; }
 }

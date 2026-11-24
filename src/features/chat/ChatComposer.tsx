@@ -292,15 +292,15 @@ export default function ChatComposer({
               </div>
               {onSelectAllMcpTools && onClearMcpTools && (
                 <div className="flex items-center gap-1.5">
-                  <button type="button" onClick={onSelectAllMcpTools} disabled={controlsLocked || selectedMcpTools.length === mcpCatalog.length} className="app-button app-button--secondary app-button--sm">{ct("selectAll")}</button>
-                  <button type="button" onClick={onClearMcpTools} disabled={controlsLocked || selectedMcpTools.length === 0} className="app-button app-button--ghost app-button--sm">{ct("clearAll")}</button>
+                  <button type="button" onClick={onSelectAllMcpTools} disabled={controlsLocked || selectedMcpTools.length === mcpCatalog.length} className="app-button app-button--secondary">{ct("selectAll")}</button>
+                  <button type="button" onClick={onClearMcpTools} disabled={controlsLocked || selectedMcpTools.length === 0} className="app-button app-button--ghost">{ct("clearAll")}</button>
                 </div>
               )}
             </div>
             {filteredMcpCatalog.length === 0 ? (
               <p className="mt-2 text-xs ui-color-faint" role="status">{ct("noMcpToolMatches")}</p>
             ) : (
-              <div className="chat-mcp-catalog-slot">
+              <div className="chat-mcp-catalog-slot mt-2">
                 <div className="flex flex-col gap-1.5">
                   {filteredMcpCatalog.map((entry, idx) => {
                     const key = `${entry.serverId}:${entry.tool.name}`;
@@ -310,7 +310,7 @@ export default function ChatComposer({
                       <div key={key} className="chat-mcp-tool-item">
                         <label className="flex max-w-full items-center gap-1.5 text-xs ui-color-muted">
                           <input type="checkbox" checked={checked} onChange={() => toggleMcpTool(key)} disabled={controlsLocked} aria-describedby={descId} />
-                          <span className="max-w-52 app-text-wrap" title={`${normalizeDisplayText(entry.serverName)}: ${normalizeDisplayText(entry.tool.name)}`}>{normalizeDisplayText(entry.serverName)} · {normalizeDisplayText(entry.tool.name)}</span>
+                          <span className="min-w-0 flex-1 app-text-wrap" title={`${normalizeDisplayText(entry.serverName)}: ${normalizeDisplayText(entry.tool.name)}`}>{normalizeDisplayText(entry.serverName)} · {normalizeDisplayText(entry.tool.name)}</span>
                         </label>
                         {descId && entry.tool.description && <p id={descId} className="chat-mcp-tool-desc text-xs ui-color-faint">{normalizeDisplayText(entry.tool.description)}</p>}
                       </div>

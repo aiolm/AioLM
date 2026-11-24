@@ -10,9 +10,10 @@ import { isServerBusy } from "../../shared/lib/serverLifecycle";
 import { useSessionPolling } from "../../shared/hooks/useSessionPolling";
 import { useSessionTransitionInProgress } from "../../shared/state/sessionTransitions";
 import { useFlashMessage } from "../../shared/hooks/useFlashMessage";
-import { updateTask, useTasks } from "../../shared/state/taskRegistry";
-import { estimateDownloadSpeed, type DownloadSample } from "../../shared/lib/transfer";
-import { BACKENDS, initialRows, mergeBackendRows, readLatestCache, readShowAll, writeLatestCache, writeShowAll, type BackendRow } from "./runtimesHelpers";
+import { getTaskSnapshot, isDownloadCenterTask, updateTask, useTasks } from "../../shared/state/taskRegistry";
+import { isRuntimeDownloadPhase } from "../../shared/runtime/runtimeUtils";
+import { appendDownloadSample, estimateDownloadSpeed, type DownloadSample } from "../../shared/lib/transfer";
+import { BACKENDS, backendDisplayName, initialRows, mergeBackendRows, readLatestCache, readShowAll, writeLatestCache, writeShowAll, type BackendRow } from "./runtimesHelpers";
 import { runExportRuntime, runImportRuntime, runInstall, runInstallPullRequest, runReviewPullRequest } from "./runtimesActions";
 
 /** Owns all Runtimes panel state: backend catalog rows, device detection, the
@@ -58,6 +59,18 @@ export function useRuntimesController(store: AppStore, active: boolean, native =
   const ownedRuntimeBusy = bundleBusy || prBusy || rows.some((row) => row.busy);
   const runtimeBusy = ownedRuntimeBusy
     || tasks.some(task => task.id === 'runtime-operation' && (task.state === 'running' || task.state === 'cancelling'));
+  const hasFailedRuntimeDownload = tasks.some(
+    (task) =>
+      task.id === "runtime-operation"
+      && isDownloadCenterTask(task)
+      && (task.state === "failed" || task.state === "crashed"),
+  );
+  const activeDownloadSpeedBps = tasks.find(
+    (task) =>
+      task.id === "runtime-operation"
+      && isDownloadCenterTask(task)
+      && (task.state === "running" || task.state === "cancelling"),
+  )?.speedBps;
 
   const fail = (label: string, error: unknown) => {
     setFailure(`${label}: ${error instanceof Error ? error.message : String(error)}`);
@@ -147,19 +160,62 @@ export function useRuntimesController(store: AppStore, active: boolean, native =
     // Same sliding window as model downloads, so the task strip can show a
     // rate and time left for an engine download too.
     let samples: DownloadSample[] = [];
+    let sampleStreamKey = "";
     void api.onRuntimeProgress((progress) => {
       if (!mounted) return;
       if (progress.backend === "import" || progress.backend === "export") {
-        setBundleProgress(progress);
+        setBundleProgress((previous) =>
+          previous &&
+          previous.backend === progress.backend &&
+          previous.build === progress.build &&
+          previous.phase === progress.phase &&
+          previous.received === progress.received &&
+          previous.total === progress.total
+            ? previous
+            : progress,
+        );
       } else {
-        setRows((previous) => previous.map((row) => row.backend === progress.backend ? { ...row, progress } : row));
+        setRows((previous) => {
+          const index = previous.findIndex((row) => row.backend === progress.backend);
+          if (index < 0) return previous;
+          const current = previous[index]!.progress;
+          if (
+            current &&
+            current.backend === progress.backend &&
+            current.build === progress.build &&
+            current.phase === progress.phase &&
+            current.received === progress.received &&
+            current.total === progress.total
+          ) {
+            return previous;
+          }
+          return previous.map((row, rowIndex) => (rowIndex === index ? { ...row, progress } : row));
+        });
       }
-      samples = progress.phase === "downloading" && progress.total > 0
-        ? [...samples, { received: progress.received, at: Date.now() }].slice(-30)
-        : [];
+      const isDownloadPhase = isRuntimeDownloadPhase(progress.phase);
+      const isBundleBytes =
+        (progress.backend === "import" || progress.backend === "export") &&
+        (progress.phase === "packaging" || progress.phase === "extracting" || progress.phase === "verified") &&
+        progress.total > 0;
+      const streamKey = `${progress.backend}:${progress.build}:${progress.phase}`;
+      if (isDownloadPhase && (progress.received > 0 || progress.total > 0)) {
+        const baseSamples = streamKey === sampleStreamKey ? samples : [];
+        samples = appendDownloadSample(baseSamples, progress.received, Date.now());
+        sampleStreamKey = streamKey;
+      } else {
+        samples = [];
+        sampleStreamKey = "";
+      }
+      const currentTask = getTaskSnapshot().find((task) => task.id === "runtime-operation");
+      const estimatedSpeed = isDownloadPhase ? estimateDownloadSpeed(samples) : null;
+      const speedBps = isDownloadPhase
+        ? (estimatedSpeed ?? (currentTask?.phase === progress.phase ? currentTask.speedBps : undefined))
+        : undefined;
       updateTask("runtime-operation", {
-        phase: progress.phase, received: progress.received, total: progress.total,
-        speedBps: estimateDownloadSpeed(samples) ?? undefined,
+        phase: progress.phase,
+        received: isDownloadPhase || isBundleBytes ? progress.received : undefined,
+        total: isDownloadPhase || isBundleBytes ? progress.total : undefined,
+        speedBps,
       });
     }).then((unlisten) => {
       if (mounted) unsubRef.current = unlisten;
@@ -223,7 +279,7 @@ export function useRuntimesController(store: AppStore, active: boolean, native =
     try {
       await api.rtUninstall(backend, build);
       notifyRuntimeInventoryChanged();
-      flashT(t("ui.uninstalledOk", { backend, build: formatRuntimeVersion(build, installedVersion(backend, build)) }));
+      flashT(t("ui.uninstalledOk", { backend: backendDisplayName(locale, backend), build: formatRuntimeVersion(build, installedVersion(backend, build)) }));
       // Removing a build clears it from every profile that named it, so the
       // panel reloads the configuration rather than keeping a selection that
       // no longer exists on disk.
@@ -263,6 +319,7 @@ export function useRuntimesController(store: AppStore, active: boolean, native =
     prSource, setPrSource, prBusy, bundleBusy, bundleProgress, activePrBackend, prReviewBusy,
     prPreview, setPrPreview, pendingUninstall, setPendingUninstall, uninstallBusy, cancelBusy,
     device, showAll, toggleShowAll, serverRunning, sessionsInUse, runtimeBusy, ownedRuntimeBusy,
+    hasFailedRuntimeDownload, activeDownloadSpeedBps,
     refresh,
     cancelInstall, exportRuntime, importRuntime, install,
     reviewPullRequest, installPullRequest, uninstall, confirmUninstall,

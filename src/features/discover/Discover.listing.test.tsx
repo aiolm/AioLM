@@ -5,7 +5,8 @@ import * as api from "../../shared/api/index";
 import { I18nProvider } from "../../shared/i18n/i18n";
 import { createTestStore } from "../../testing/appStore";
 import { finishTask, getTaskSnapshot, registerTask, removeTask, TASK_CLEAR_DELAY_MS, updateTask } from "../../shared/state/taskRegistry";
-import { MODEL_DOWNLOAD_TASK_ID } from "../../shared/state/modelDownloadTask";
+import { resetPendingDownloadsStoreForTests } from "../../shared/state/pendingDownloadsStore";
+import { defined } from "../../testing/assertDefined";
 import { DraftGuardProvider, useEditorDraft } from "../../shared/state/draftGuard";
 import DiscoverPanel from "./Discover";
 import { useModelSettings } from "../model-settings/ModelSettingsProvider";
@@ -61,9 +62,10 @@ describe("Discover listing and installed files", () => {
     vi.mocked(api.hfModelFiles).mockResolvedValue(ggufOnly([]));
     vi.mocked(api.hfInstalledFiles).mockResolvedValue([]);
     vi.mocked(api.hfInstalledSnapshots).mockResolvedValue([]);
+    resetPendingDownloadsStoreForTests();
     localStorage.clear();
   });
-  afterEach(() => { for (const task of getTaskSnapshot()) removeTask(task.id); });
+  afterEach(() => { resetPendingDownloadsStoreForTests(); for (const task of getTaskSnapshot()) removeTask(task.id); });
 
   it("opens on trending repositories without a search term and still re-lists by most downloads", async () => {
     // The synthetic Hub ranks a different repository first for each order, so
@@ -232,7 +234,7 @@ describe("Discover listing and installed files", () => {
     // render: the second repository publishes the same file name.
     expect(screen.queryByRole("button", { name: "Installed: model.gguf" })).toBeNull();
     await clickDownload("Download: model.gguf");
-    expect(api.hfDownloadModel).toHaveBeenCalledWith("owner/second", "model.gguf", "models");
+    expect(api.hfDownloadModel).toHaveBeenCalledWith("owner/second", "model.gguf", "models", undefined, undefined, expect.any(String));
   });
 
   it("recovers repository files in place without rerunning the search or downloading automatically", async () => {
@@ -352,7 +354,7 @@ describe("Discover listing and installed files", () => {
     await clickDownload("Download: model.gguf");
     fireEvent.click(screen.getByRole("button", { name: /owner\/other/ }));
     await act(async () => releaseDownload({ path: "models/model.gguf", repo_id: "owner/from", file_path: "model.gguf", size_bytes: 1000 }));
-    await waitFor(() => expect(getTaskSnapshot().find(task => task.id === "model-download")?.state).toBe("completed"));
+    await waitFor(() => expect(getTaskSnapshot().find(task => task.kind === "model-download")?.state).toBe("completed"));
     expect(screen.queryByRole("button", { name: "Discard & continue" })).not.toBeInTheDocument();
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
@@ -369,7 +371,7 @@ describe("Discover listing and installed files", () => {
     store.cfg!.models_dir = "other-models";
     view.rerender(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
     await act(async () => releaseDownload({ path: "models/model.gguf", repo_id: "owner/from", file_path: "model.gguf", size_bytes: 1000 }));
-    await waitFor(() => expect(getTaskSnapshot().find(task => task.id === "model-download")?.state).toBe("completed"));
+    await waitFor(() => expect(getTaskSnapshot().find(task => task.kind === "model-download")?.state).toBe("completed"));
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
 
@@ -384,7 +386,7 @@ describe("Discover listing and installed files", () => {
     store.cfg!.active_provider = "vllm"; store.cfg!.active_runtime = "synthetic-vllm-runtime";
     view.rerender(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
     await act(async () => releaseDownload({ path: "models/model.gguf", repo_id: "owner/model", file_path: "model.gguf", size_bytes: 1000 }));
-    await waitFor(() => expect(getTaskSnapshot().find(task => task.id === "model-download")?.state).toBe("completed"));
+    await waitFor(() => expect(getTaskSnapshot().find(task => task.kind === "model-download")?.state).toBe("completed"));
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
 
@@ -400,7 +402,7 @@ describe("Discover listing and installed files", () => {
     store.cfg!.active_model = "models/newer.gguf";
     view.rerender(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
     await act(async () => releaseDownload({ path: "models/model.gguf", repo_id: "owner/model", file_path: "model.gguf", size_bytes: 1000 }));
-    await waitFor(() => expect(getTaskSnapshot().find(task => task.id === "model-download")?.state).toBe("completed"));
+    await waitFor(() => expect(getTaskSnapshot().find(task => task.kind === "model-download")?.state).toBe("completed"));
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
 
@@ -416,7 +418,7 @@ describe("Discover listing and installed files", () => {
     await clickDownload("Download: model.gguf");
     fireEvent.click(screen.getByRole("button", { name: /owner\/other/ }));
     await act(async () => releaseDownload({ path: "models/model.gguf", repo_id: "owner/from", file_path: "model.gguf", size_bytes: 1000 }));
-    await waitFor(() => expect(getTaskSnapshot().find(task => task.id === "model-download")?.state).toBe("completed"));
+    await waitFor(() => expect(getTaskSnapshot().find(task => task.kind === "model-download")?.state).toBe("completed"));
     expect(onSelectModel).not.toHaveBeenCalled();
   });
 
@@ -431,7 +433,7 @@ describe("Discover listing and installed files", () => {
     await clickDownload("Download projector: mmproj.gguf");
     fireEvent.click(screen.getByRole("button", { name: /owner\/other/ }));
     await act(async () => releaseDownload({ path: "models/mmproj.gguf", repo_id: "owner/from", file_path: "mmproj.gguf", size_bytes: 1000 }));
-    await waitFor(() => expect(getTaskSnapshot().find(task => task.id === "model-download")?.state).toBe("completed"));
+    await waitFor(() => expect(getTaskSnapshot().find(task => task.kind === "model-download")?.state).toBe("completed"));
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
 
@@ -491,9 +493,10 @@ describe("Discover listing and installed files", () => {
     try {
       await act(async () => releaseDownload({ path: `models/${file}`, repo_id: "owner/model", file_path: file, size_bytes: 1000 }));
       expect(screen.getByRole("button", { name: "Discard & continue" })).toBeVisible();
-      expect(getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID)?.state).toBe("completed");
+      const dlTaskId = defined(getTaskSnapshot().find(task => task.kind === "model-download")).id;
+      expect(getTaskSnapshot().find(task => task.id === dlTaskId)?.state).toBe("completed");
       await act(() => vi.advanceTimersByTime(TASK_CLEAR_DELAY_MS + 1));
-      expect(getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID)).toBeUndefined();
+      expect(getTaskSnapshot().find(task => task.id === dlTaskId)).toBeUndefined();
       const toolbar = screen.getByRole("textbox").closest("form");
       expect(toolbar).toHaveAttribute("aria-busy", "true");
       await act(async () => {
@@ -527,14 +530,14 @@ describe("Discover listing and installed files", () => {
     try {
       await act(async () => releaseDownload({ path: "models/model.gguf", repo_id: "owner/model", file_path: "model.gguf", size_bytes: 1000 }));
       expect(screen.getByRole("button", { name: "Discard & continue" })).toBeVisible();
-      const previous = getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID);
-      expect(previous?.state).toBe("completed");
+      const previous = defined(getTaskSnapshot().find(task => task.kind === "model-download"));
+      expect(previous.state).toBe("completed");
       const replacementCancel = () => Promise.resolve();
-      await act(() => registerTask({ id: MODEL_DOWNLOAD_TASK_ID, kind: "model-download", label: "replacement", interruptible: true, startedAt: previous!.startedAt, cancel: replacementCancel }));
-      expect(getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID)?.cancel).toBe(replacementCancel);
-      act(() => finishTask(MODEL_DOWNLOAD_TASK_ID, "completed"));
+      await act(() => registerTask({ id: previous.id, kind: "model-download", label: "replacement", interruptible: true, startedAt: previous.startedAt, cancel: replacementCancel }));
+      expect(getTaskSnapshot().find(task => task.id === previous.id)?.cancel).toBe(replacementCancel);
+      act(() => finishTask(previous.id, "completed"));
       await act(() => vi.advanceTimersByTime(TASK_CLEAR_DELAY_MS + 1));
-      expect(getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID)).toBeUndefined();
+      expect(getTaskSnapshot().find(task => task.id === previous.id)).toBeUndefined();
       await act(async () => {
         fireEvent.click(screen.getByRole("button", { name: "Discard & continue" }));
         await Promise.resolve();
@@ -567,20 +570,20 @@ describe("Discover listing and installed files", () => {
     try {
       await act(async () => releaseDownload({ path: "models/model.gguf", repo_id: "owner/model", file_path: "model.gguf", size_bytes: 1000 }));
       expect(screen.getByRole("button", { name: "Discard & continue" })).toBeVisible();
-      const previous = getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID);
-      expect(previous?.state).toBe("completed");
+      const previous = defined(getTaskSnapshot().find(task => task.kind === "model-download"));
+      expect(previous.state).toBe("completed");
       await act(() => vi.advanceTimersByTime(TASK_CLEAR_DELAY_MS + 1));
-      expect(getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID)).toBeUndefined();
+      expect(getTaskSnapshot().find(task => task.id === previous.id)).toBeUndefined();
       const replacementCancel = () => Promise.resolve();
-      await act(() => registerTask({ id: MODEL_DOWNLOAD_TASK_ID, kind: "model-download", label: "replacement", interruptible: true, startedAt: previous!.startedAt, cancel: replacementCancel }));
+      await act(() => registerTask({ id: previous.id, kind: "model-download", repoId: "owner/model", downloadKind: "gguf", filePath: "model.gguf", label: "replacement", interruptible: true, startedAt: previous.startedAt, cancel: replacementCancel }));
       await act(async () => {
         fireEvent.click(screen.getByRole("button", { name: "Discard & continue" }));
         await Promise.resolve();
         await Promise.resolve();
       });
       expect(store.updateConfig).not.toHaveBeenCalled();
-      expect(getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID)?.cancel).toBe(replacementCancel);
-      expect(screen.getByRole("button", { name: "Download: model.gguf" })).toBeDisabled();
+      expect(getTaskSnapshot().find(task => task.id === previous.id)?.cancel).toBe(replacementCancel);
+      expect(screen.getByRole("button", { name: "Downloading: model.gguf" })).toBeDisabled();
     } finally {
       vi.useRealTimers();
     }
@@ -614,9 +617,10 @@ describe("Discover listing and installed files", () => {
     };
     vi.useFakeTimers();
     try {
-      act(() => finishTask(MODEL_DOWNLOAD_TASK_ID, "completed"));
+      const dlTaskId = defined(getTaskSnapshot().find(task => task.kind === "model-download")).id;
+      act(() => finishTask(dlTaskId, "completed"));
       await act(() => vi.advanceTimersByTime(TASK_CLEAR_DELAY_MS + 1));
-      expect(getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID)).toBeUndefined();
+      expect(getTaskSnapshot().find(task => task.id === dlTaskId)).toBeUndefined();
       await act(async () => releaseSnapshot(artifact));
       expect(screen.getByRole("button", { name: "Configure and run" })).toBeVisible();
       expect(toolbar).toHaveAttribute("aria-busy", "false");
@@ -633,17 +637,17 @@ describe("Discover listing and installed files", () => {
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
     fireEvent.click(await screen.findByRole("button", { name: /owner\/model/ }));
     await clickDownload("Download: model.gguf");
-    const previous = getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID);
-    expect(previous?.cancel).toBeTypeOf("function");
-    act(() => updateTask(MODEL_DOWNLOAD_TASK_ID, { received: 4 }));
-    expect(getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID)?.cancel).toBe(previous?.cancel);
+    const previous = defined(getTaskSnapshot().find(task => task.kind === "model-download"));
+    expect(previous.cancel).toBeTypeOf("function");
+    act(() => updateTask(previous.id, { received: 4 }));
+    expect(getTaskSnapshot().find(task => task.id === previous.id)?.cancel).toBe(previous.cancel);
     const replacementCancel = () => Promise.resolve();
-    await act(() => registerTask({ id: MODEL_DOWNLOAD_TASK_ID, kind: "model-download", label: "replacement", interruptible: true, startedAt: previous!.startedAt, cancel: replacementCancel }));
-    expect(getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID)?.cancel).toBe(replacementCancel);
-    act(() => updateTask(MODEL_DOWNLOAD_TASK_ID, { received: 12 }));
-    expect(getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID)?.cancel).toBe(replacementCancel);
+    await act(() => registerTask({ id: previous.id, kind: "model-download", label: "replacement", interruptible: true, startedAt: previous.startedAt, cancel: replacementCancel }));
+    expect(getTaskSnapshot().find(task => task.id === previous.id)?.cancel).toBe(replacementCancel);
+    act(() => updateTask(previous.id, { received: 12 }));
+    expect(getTaskSnapshot().find(task => task.id === previous.id)?.cancel).toBe(replacementCancel);
     await act(async () => releaseDownload({ path: "models/old.gguf", repo_id: "owner/model", file_path: "model.gguf", size_bytes: 1000 }));
-    await waitFor(() => expect(getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID)?.state).toBe("running"));
+    await waitFor(() => expect(getTaskSnapshot().find(task => task.id === previous.id)?.state).toBe("running"));
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
 
@@ -657,14 +661,14 @@ describe("Discover listing and installed files", () => {
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
     fireEvent.click(await screen.findByRole("button", { name: /owner\/model/ }));
     await clickDownload("Download: model.gguf");
+    const previous = defined(getTaskSnapshot().find(task => task.kind === "model-download"));
+    expect(previous.cancel).toBeTypeOf("function");
     fireEvent.click(screen.getByRole("button", { name: "Pause" }));
     await waitFor(() => expect(api.hfCancelDownload).toHaveBeenCalledOnce());
-    const previous = getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID);
-    expect(previous?.cancel).toBeTypeOf("function");
     const replacementCancel = () => Promise.resolve();
-    await act(() => registerTask({ id: MODEL_DOWNLOAD_TASK_ID, kind: "model-download", label: "replacement", interruptible: true, startedAt: previous!.startedAt, cancel: replacementCancel }));
+    await act(() => registerTask({ id: previous.id, kind: "model-download", label: "replacement", interruptible: true, startedAt: previous.startedAt, cancel: replacementCancel }));
     await act(async () => rejectCancel(new Error("old cancel failed")));
-    await waitFor(() => expect(getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID)?.state).toBe("running"));
+    await waitFor(() => expect(getTaskSnapshot().find(task => task.id === previous.id)?.state).toBe("running"));
     expect(screen.queryByText("old cancel failed")).not.toBeInTheDocument();
     await act(async () => releaseDownload({ path: "models/old.gguf", repo_id: "owner/model", file_path: "model.gguf", size_bytes: 1000 }));
     expect(store.updateConfig).not.toHaveBeenCalled();
@@ -679,9 +683,10 @@ describe("Discover listing and installed files", () => {
     chooseSafetensors();
     fireEvent.click(await screen.findByRole("button", { name: /owner\/model/ }));
     await clickDownload("Download complete model folder");
+    const previousId = defined(getTaskSnapshot().find(task => task.kind === "model-download")).id;
     const replacementCancel = () => Promise.resolve();
     if (retirement === "unmounted") view.unmount();
-    else await act(() => registerTask({ id: MODEL_DOWNLOAD_TASK_ID, kind: "model-download", label: "replacement", interruptible: true, cancel: replacementCancel }));
+    else await act(() => registerTask({ id: previousId, kind: "model-download", label: "replacement", interruptible: true, cancel: replacementCancel }));
     const changed = vi.fn();
     window.addEventListener(MODEL_CATALOG_CHANGED, changed);
     try {
@@ -689,7 +694,7 @@ describe("Discover listing and installed files", () => {
         format: "hf-safetensors", role: "model", size_bytes: 1000, file_count: 1, architectures: [],
         modalities: { text: true, image: false, audio: false, video: false }, missing: [], incomplete: false, ownership: "app", notes: [] }));
       expect(changed).toHaveBeenCalledTimes(1);
-      const task = getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID);
+      const task = getTaskSnapshot().find(item => item.id === previousId);
       expect(task?.state).toBe(retirement === "unmounted" ? "completed" : "running");
       if (retirement === "replaced") expect(task?.cancel).toBe(replacementCancel);
       expect(store.updateConfig).not.toHaveBeenCalled();
@@ -707,10 +712,10 @@ describe("Discover listing and installed files", () => {
     chooseSafetensors();
     fireEvent.click(await screen.findByRole("button", { name: /owner\/model/ }));
     await clickDownload("Download complete model folder");
-    const previous = getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID);
-    expect(previous?.cancel).toBeTypeOf("function");
+    const previous = defined(getTaskSnapshot().find(task => task.kind === "model-download"));
+    expect(previous.cancel).toBeTypeOf("function");
     const replacementCancel = () => Promise.resolve();
-    await act(() => registerTask({ id: MODEL_DOWNLOAD_TASK_ID, kind: "model-download", label: "replacement", interruptible: true, startedAt: previous!.startedAt, cancel: replacementCancel }));
+    await act(() => registerTask({ id: previous.id, kind: "model-download", label: "replacement", interruptible: true, startedAt: previous.startedAt, cancel: replacementCancel }));
     await act(async () => releaseSnapshot({
       path: "models/old-snapshot",
       name: "old-snapshot",
@@ -725,8 +730,35 @@ describe("Discover listing and installed files", () => {
       ownership: "app",
       notes: [],
     }));
-    await waitFor(() => expect(getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID)?.state).toBe("running"));
+    await waitFor(() => expect(getTaskSnapshot().find(task => task.id === previous.id)?.state).toBe("running"));
     expect(screen.queryByText("Download complete")).not.toBeInTheDocument();
+  });
+
+  it("downloads multiple GGUF files concurrently and pauses one independently", async () => {
+    vi.mocked(api.hfModelFiles).mockResolvedValue(ggufOnly([
+      { path: "model-Q4_K_M.gguf", size_bytes: 1000, is_mmproj: false, download_url: "" },
+      { path: "model-Q8_0.gguf", size_bytes: 2000, is_mmproj: false, download_url: "" },
+    ]));
+    const pendingResolvers = new Map<string, { resolve: (value: api.DownloadedModel) => void; reject: (err: Error) => void }>();
+    vi.mocked(api.hfDownloadModel).mockImplementation(async (_repoId, filePath) =>
+      new Promise<api.DownloadedModel>((resolve, reject) => {
+        pendingResolvers.set(filePath, { resolve, reject });
+      }),
+    );
+
+    render(<I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore()} /></I18nProvider>);
+    fireEvent.click(await screen.findByRole("button", { name: /owner\/model/ }));
+    await clickDownload("Download: model-Q4_K_M.gguf");
+    await clickDownload("Download: model-Q8_0.gguf");
+
+    expect(api.hfDownloadModel).toHaveBeenCalledTimes(2);
+    expect(getTaskSnapshot().filter(task => task.kind === "model-download" && task.state === "running")).toHaveLength(2);
+    const pauseButtons = screen.getAllByRole("button", { name: "Pause" });
+    expect(pauseButtons).toHaveLength(2);
+    const q4DownloadId = defined(vi.mocked(api.hfDownloadModel).mock.calls[0]?.[5]);
+    const q4Row = pauseButtons[0]!.closest<HTMLElement>('[role="listitem"]')!;
+    fireEvent.click(within(q4Row).getByRole("button", { name: "Pause" }));
+    await waitFor(() => expect(api.hfCancelDownload).toHaveBeenCalledWith(q4DownloadId));
   });
 
   it("says so when the installed-file lookup fails instead of failing the file list", async () => {
@@ -785,5 +817,55 @@ describe("Discover listing and installed files", () => {
     await waitFor(() => expect(api.hfClearToken).toHaveBeenCalledOnce());
     expect(await screen.findByText("Hugging Face access token removed.")).toBeVisible();
     expect(screen.getByText("Not set")).toBeVisible();
+  });
+
+  it("does not freeze searching when re-selecting the active format in flight or when typing a new query", async () => {
+    let resolveFirst!: (value: api.HfModel[]) => void;
+    vi.mocked(api.hfSearchModels).mockImplementationOnce(() => new Promise(resolve => { resolveFirst = resolve; }));
+    render(<I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore()} /></I18nProvider>);
+
+    expect(screen.getByRole("button", { name: "Scanning" })).toBeDisabled();
+    // Re-selecting the currently selected format while a search is in flight must not retire the spinner without stopping it.
+    fireEvent.click(screen.getByRole("combobox", { name: "Model format" }));
+    fireEvent.click(screen.getByRole("option", { name: "All formats" }));
+    expect(api.hfSearchModels).toHaveBeenCalledTimes(1);
+
+    await act(async () => resolveFirst([listed("owner/initial")]));
+    expect(await screen.findByRole("button", { name: /owner\/initial/ })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Search models" })).toBeEnabled();
+
+    // Re-selecting the already-active format while idle must not wipe results or search on keystrokes.
+    fireEvent.click(screen.getByRole("combobox", { name: "Model format" }));
+    fireEvent.click(screen.getByRole("option", { name: "All formats" }));
+    expect(screen.getByRole("button", { name: /owner\/initial/ })).toBeVisible();
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "H" } });
+    expect(api.hfSearchModels).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a new query supersede a slow in-flight search immediately", async () => {
+    let resolveOpening!: (value: api.HfModel[]) => void;
+    let resolveHy4!: (value: api.HfModel[]) => void;
+    vi.mocked(api.hfSearchModels)
+      .mockImplementationOnce(() => new Promise(resolve => { resolveOpening = resolve; }))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveHy4 = resolve; }));
+    render(<I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore()} /></I18nProvider>);
+
+    expect(screen.getByRole("button", { name: "Scanning" })).toBeDisabled();
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "Hy4" } });
+    // Once the query diverges from the in-flight search, submit becomes enabled immediately.
+    const submit = screen.getByRole("button", { name: "Search models" });
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+    expect(api.hfSearchModels).toHaveBeenNthCalledWith(2, "Hy4", 30, "trendingScore", "all");
+    expect(screen.getByRole("button", { name: "Scanning" })).toBeDisabled();
+
+    await act(async () => resolveOpening([listed("owner/opening")]));
+    expect(screen.queryByRole("button", { name: /owner\/opening/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Scanning" })).toBeDisabled();
+
+    await act(async () => resolveHy4([listed("owner/Hy4-model")]));
+    expect(await screen.findByRole("button", { name: /owner\/Hy4-model/ })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Search models" })).toBeEnabled();
   });
 });

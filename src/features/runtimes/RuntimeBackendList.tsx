@@ -14,6 +14,7 @@ interface Props {
   prBusy: boolean;
   bundleBusy: boolean;
   cancelBusy: boolean;
+  downloadSpeedBps?: number;
   onBlockedAction?: (message: string) => void;
   onCancelInstall: () => void;
   onInstall: (backend: string) => void;

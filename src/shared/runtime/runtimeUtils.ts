@@ -170,6 +170,16 @@ export function buildPhaseLabelKey(phase: string): BuildPhaseLabelKey | "buildPh
   return BUILD_PHASE_LABELS[phase as keyof typeof BUILD_PHASE_LABELS] ?? "buildPhaseWorking";
 }
 
+/** Return a translation key only for known raw backend phase tokens; custom/localized phases stay untouched. */
+export function taskPhaseLabelKey(phase: string): BuildPhaseLabelKey | null {
+  if (phase === "starting") return "buildPhasePreparing";
+  return BUILD_PHASE_LABELS[phase as keyof typeof BUILD_PHASE_LABELS] ?? null;
+}
+
+export function isRuntimeDownloadPhase(phase: string): boolean {
+  return phase === "downloading" || phase === "downloading source";
+}
+
 export type RuntimeRowAction = "cancel" | "install" | "none";
 
 /**

@@ -30,12 +30,16 @@ export default function AdapterSetupPanel({ disabled, onBusyChange, onPrepared }
   useEffect(() => () => {
     generation.current += 1;
     if (running.current) {
+      running.current = false;
       void adapterSetupCancel(owner).catch(() => undefined);
       finishTask(owner, 'cancelled');
     }
+    setBusy(false);
+    setPreparing(false);
     onBusyChange(false);
   }, [onBusyChange, owner]);
   const load = async () => {
+    if (busy || disabled) return;
     const own = ++generation.current;
     setBusy(true); onBusyChange(true); setError('');
     try {
@@ -76,6 +80,7 @@ export default function AdapterSetupPanel({ disabled, onBusyChange, onPrepared }
     }
   };
   const pick = async (field: AdapterSetupRecipe['fields'][number]) => {
+    if (busy || disabled) return;
     const own = ++generation.current;
     setBusy(true); onBusyChange(true); setError('');
     try {

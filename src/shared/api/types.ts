@@ -177,6 +177,7 @@ export interface McpToolPayload {
 }
 
 export interface ModelDownloadProgress {
+  download_id?: string;
   repo_id: string;
   file_path: string;
   /** `verifying` re-reads data kept from an earlier, interrupted attempt. */

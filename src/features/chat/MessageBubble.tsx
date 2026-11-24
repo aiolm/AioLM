@@ -128,7 +128,7 @@ export function MessageBubble({
             )}
           </div>
         )}
-        {!isUser && <div className="mt-2 flex min-w-0 items-center gap-2 text-xs ui-color-muted">
+        {!isUser && <div className="chat-message-model mt-2 flex min-w-0 items-center gap-1.5 text-xs ui-color-muted">
           {message.model && <ModelIcon model={message.model} />}
           <span className="min-w-0 [overflow-wrap:anywhere]">
             <span className="sr-only">{translate(locale, "ui.responseModel")}: </span>

@@ -18,6 +18,7 @@ export function useDiscoverCatalog({ active, modelsDir, resetFeedback, setInclud
   const [inspection, setInspection] = useState<(api.HfRepositoryInspection & { repo: string }) | null>(null);
   const [inspectionError, setInspectionError] = useState<{ repo: string; generation: number; message: string } | null>(null);
   const [searching, setSearching] = useState(false);
+  const [inFlightSearch, setInFlightSearch] = useState<{ query: string; sort: api.HfSortKey; format: api.HfSearchFormat } | null>(null);
   const [loadingFiles, setLoadingFiles] = useState(false);
   // Which of the selected repository's files this machine already holds.
   // Activation refuses to overwrite, so offering a download for one of these
@@ -33,6 +34,10 @@ export function useDiscoverCatalog({ active, modelsDir, resetFeedback, setInclud
   const searchGeneration = useRef(0);
   const inspectGeneration = useRef(0);
   const installedGeneration = useRef(0);
+  const queryRef = useRef(query);
+  queryRef.current = query;
+  const sortRef = useRef(sort);
+  sortRef.current = sort;
 
   const [snapshots, setSnapshots] = useState<{ repo: string; destination: string; artifacts: api.ModelArtifact[] } | null>(null);
   const [checkingSnapshots, setCheckingSnapshots] = useState(false);
@@ -55,7 +60,8 @@ export function useDiscoverCatalog({ active, modelsDir, resetFeedback, setInclud
 
   // An empty query is a listing, not a mistake: the panel opens on the catalog
   // in the selected order and the search box narrows it from there.
-  const runSearch = useCallback(async (term: string, order: api.HfSortKey) => {
+  const runSearch = useCallback(async (term: string, order: api.HfSortKey, nextFormat: api.HfSearchFormat = format) => {
+    const trimmed = term.trim();
     const generation = ++searchGeneration.current;
     // A file listing already in flight belongs to a repository that is about
     // to leave the results, so retire it with the selection it was for.
@@ -66,8 +72,9 @@ export function useDiscoverCatalog({ active, modelsDir, resetFeedback, setInclud
     setInspectionError(null);
     setLoadingFiles(false);
     setSearching(true);
+    setInFlightSearch({ query: trimmed, sort: order, format: nextFormat });
     try {
-      const next = await api.hfSearchModels(term.trim(), 30, order, format);
+      const next = await api.hfSearchModels(trimmed, 30, order, nextFormat);
       if (generation !== searchGeneration.current) return;
       setResults(next);
       setListed(true);
@@ -77,7 +84,10 @@ export function useDiscoverCatalog({ active, modelsDir, resetFeedback, setInclud
       setListed(true);
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
-      if (generation === searchGeneration.current) setSearching(false);
+      if (generation === searchGeneration.current) {
+        setSearching(false);
+        setInFlightSearch(null);
+      }
     }
   }, [format, resetFeedback, setError]);
 
@@ -87,20 +97,24 @@ export function useDiscoverCatalog({ active, modelsDir, resetFeedback, setInclud
   useEffect(() => {
     if (!active || opened.current === format) return;
     opened.current = format;
-    void runSearch(query, sort);
-  }, [active, runSearch, query, sort, format]);
+    void runSearch(queryRef.current, sortRef.current, format);
+  }, [active, format, runSearch]);
 
   useEffect(() => () => {
     searchGeneration.current += 1; inspectGeneration.current += 1; installedGeneration.current += 1;
     // StrictMode replays mount effects while preserving refs. Retire the
-    // listing marker with its request so the next setup can load the catalog.
+    // listing marker and clear in-flight spinners so nothing stays stuck.
+    setSearching(false);
+    setInFlightSearch(null);
+    setLoadingFiles(false);
     opened.current = '';
   }, []);
 
   // Sort is part of the request, so changing it re-runs what is on screen.
   const changeSort = (order: api.HfSortKey) => {
+    if (order === sort && opened.current === format) return;
     setSort(order);
-    if (opened.current) void runSearch(query, order);
+    if (opened.current) void runSearch(query, order, format);
   };
 
   const inspect = async (model: api.HfModel) => {
@@ -180,11 +194,25 @@ export function useDiscoverCatalog({ active, modelsDir, resetFeedback, setInclud
   const installedSnapshot = wholeSnapshots.find(artifact => !artifact.incomplete && artifact.missing.length === 0);
 
   const changeFormat = (value: api.HfSearchFormat) => {
+    if (value === format && opened.current === value) return;
     searchGeneration.current += 1; inspectGeneration.current += 1;
-    setFormat(value); setSelected(null); setInspection(null); setLoadingFiles(false); setResults([]);
-    resetFeedback(); opened.current = '';
+    setFormat(value); setSelected(null); setInspection(null); setInspectionError(null); setLoadingFiles(false); setResults([]);
+    resetFeedback();
+    if (active) {
+      opened.current = value;
+      void runSearch(query, sort, value);
+    } else {
+      setSearching(false);
+      setInFlightSearch(null);
+      opened.current = '';
+    }
   };
-  return { format, query, setQuery, sort, results, listed, selected, loadingFiles, searching,
+  const sameSearchInFlight = searching
+    && inFlightSearch !== null
+    && inFlightSearch.query === query.trim()
+    && inFlightSearch.sort === sort
+    && inFlightSearch.format === format;
+  return { format, query, setQuery, sort, results, listed, selected, loadingFiles, searching, sameSearchInFlight,
     inspectGeneration, files, snapshotCandidate, safetensorsFiles, noInAppDownload, fileFormats,
     currentInspectionError, installed, installedUnknown, checkingInstalled, repoSnapshots,
     wholeSnapshots, installedSnapshot, checkingSnapshots, setInstalledLookup, setInstalledRevision,

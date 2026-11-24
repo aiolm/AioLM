@@ -288,6 +288,7 @@ export function useEntrypointRegistrationController({ locked, onRegistered, onPu
   };
   const changeHelpArgs = (next: string[]) => { setHelpArgs(next); setFound(null); setSkipHelp(false); };
   const changeTextChoice = (next: HelpTextChoice) => {
+    if (busy) return;
     generation.current += 1;
     setTextChoice(next); setFound(null); setSkipHelp(false); setError('');
   };

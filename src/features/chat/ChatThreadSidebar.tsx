@@ -55,11 +55,11 @@ export default function ChatThreadSidebar({
       className={`chat-thread-sidebar${open ? " is-open" : ""}`}
 
     >
-      <div className="flex items-center gap-2 pb-3">
+      <div className="chat-thread-header">
         <div className="min-w-0 flex-1">
-          <h2 className="chat-thread-heading">{ct("conversations")} <span className="text-xs tabular-nums ui-color-muted">{threadCount}</span></h2>
+          <h2 className="chat-thread-heading">{ct("conversations")} <span className="models-list-count">{threadCount}</span></h2>
         </div>
-        <button type="button" onClick={onNewThread} className="app-button app-button--primary app-button--sm shrink-0 whitespace-nowrap">{ct("newChat")}</button>
+        <button type="button" onClick={onNewThread} className="app-button app-button--primary shrink-0 whitespace-nowrap">{ct("newChat")}</button>
         {onClose && (
           <button
             type="button"
@@ -112,7 +112,7 @@ export default function ChatThreadSidebar({
           const isLive = thread.id === liveThreadId;
           const count = isLive && liveMessageCount !== undefined ? liveMessageCount : thread.messages.length;
           return (
-            <div key={thread.id} role="listitem" className={`app-list-row chat-thread-row flex items-center justify-between gap-1 px-1 py-1 ${thread.id === activeThreadId ? "is-selected" : ""}`}>
+            <div key={thread.id} role="listitem" className={`app-list-row chat-thread-row flex items-center justify-between gap-1 ${thread.id === activeThreadId ? "is-selected" : ""}`}>
               <div className="min-w-0 flex-1 overflow-hidden">
               <button
                 type="button"
@@ -136,7 +136,7 @@ export default function ChatThreadSidebar({
                 </span>
               </button>
               </div>
-              <button type="button" onClick={() => onDelete(thread)} aria-label={`${ct("delete")}: ${displayChatTitle(thread.title, ct('newConversation'))}`} className="app-icon-button app-icon-button--sm app-icon-button--danger shrink-0 mr-1" title={ct("delete")}>
+              <button type="button" onClick={() => onDelete(thread)} aria-label={`${ct("delete")}: ${displayChatTitle(thread.title, ct('newConversation'))}`} className="app-icon-button app-icon-button--sm app-icon-button--danger shrink-0" title={ct("delete")}>
                 <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg>
               </button>
             </div>

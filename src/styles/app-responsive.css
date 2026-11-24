@@ -2,14 +2,15 @@
  .app-shell:not(.app-shell--rail) { --aiolm-sidebar-width: 200px; }
 }
 @media (max-width: 1199px) {
- .aiolm-runtime-context { flex-basis: clamp(260px, 38vw, 440px); max-width: 440px; }
+ .aiolm-header { grid-template-columns: minmax(88px, 1fr) minmax(0, 580px) minmax(88px, 1fr); gap: 12px; }
+ .aiolm-runtime-context { max-width: 580px; }
 }
 @media (max-width: 959px) {
  .app-shell { grid-template-columns: minmax(0,1fr); }
  .aiolm-sidebar { display: none; }
  .aiolm-menu-trigger { display: inline-flex; }
- .aiolm-header { padding-inline: var(--ui-canvas-padding); gap: 8px; }
- .aiolm-runtime-context { flex-basis: clamp(220px, 42vw, 380px); max-width: 380px; }
+ .aiolm-header { grid-template-columns: minmax(96px, 1fr) minmax(0, 540px) minmax(80px, 1fr); padding-inline: var(--ui-canvas-padding); gap: 10px; }
+ .aiolm-runtime-context { max-width: 540px; }
  .app-feedback-layer, .app-task-strip { margin-inline: 16px; }
  .app-task-strip { flex-direction: column; gap: 8px; }
  .app-task-strip__list { width: 100%; grid-template-columns: minmax(0, 1fr) minmax(5rem, 120px) minmax(0, auto); }
@@ -22,15 +23,17 @@
 }
 @media (max-width: 639px) {
  :root { --ui-page-padding: 16px; --ui-canvas-padding: 16px; }
- /* Phone width: location and server state on the first line, the model pill
-    gets the full second line so its name stays readable. */
+ /* Phone width: location and utility icons stay on the first line, the unified
+    model execution bar gets the full second line so every segment stays clear. */
  .aiolm-header { display: grid; grid-template-columns: minmax(0,1fr) max-content; grid-template-rows: minmax(44px, auto) auto; height: auto; padding-block: 4px 8px; }
- .aiolm-runtime-context { grid-column: 1 / -1; grid-row: 2; max-width: none; width: 100%; }
- .aiolm-runtime-context { grid-template-columns: auto minmax(0, 1.2fr) minmax(0, 1fr); }
- .aiolm-context-scope { max-width: 112px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
- .aiolm-server { grid-column: 2; grid-row: 1; }
+ .aiolm-runtime-context { grid-column: 1 / -1; grid-row: 2; max-width: none; width: 100%; justify-self: stretch; grid-template-columns: auto minmax(0, 1.3fr) minmax(0, 0.9fr) auto; }
+ .aiolm-header-end { grid-column: 2; grid-row: 1; justify-self: end; gap: 6px; }
  .app-confirm-dialog__panel { padding: 20px; }
  .tuning-sampler-chain__add { flex-wrap: wrap; }
+}
+@media (max-width: 479px) {
+ .aiolm-runtime-context { grid-template-columns: auto minmax(0, 1fr) auto auto; }
+ .aiolm-context-runtime .aiolm-context-label { display: none; }
 }
 /* Break at the width of the page, after sidebar, padding and scrollbar space. */
 @container workspace (min-width: 680px) {
@@ -42,8 +45,11 @@
  .projects-list { position: sticky; top: 0; align-self: start; max-height: max(200px, calc(100dvh - 240px)); border-block-end: 0; border-inline-end: 0; padding-bottom: 0; padding-inline-end: 24px; }
  .projects-editor { min-height: 100%; border-inline-start: 1px solid var(--ui-border); padding-inline-start: 24px; }
  .chat-thread-toggle, .chat-thread-close { display: none; }
- .models-model-row { grid-template-columns: minmax(0,1fr) 5.5rem minmax(18rem, max-content); grid-template-areas: "name size actions" "path path files"; }
- .models-model-actions { max-width: 360px; justify-content: flex-end; }
+}
+@container workspace (min-width: 920px) {
+ .projects-workspace-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto auto auto minmax(10rem, 1fr); gap: 8px 20px; }
+ .projects-workspace-column { grid-row: span 4; grid-template-rows: auto auto auto minmax(10rem, 1fr); grid-template-rows: subgrid; align-content: stretch; }
+ .projects-workspace-column > .projects-selection-list { height: 100%; }
 }
 @container workspace (max-width: 679px) {
  .discover-columns { flex: 0 0 auto; }
@@ -73,9 +79,4 @@
  .chat-message-log { min-height: 48px; }
  .chat-composer-actions textarea { height: 52px; min-height: 52px; padding-block: 4px; }
  .chat-conversation-heading { margin-bottom: 12px; gap: 8px; }
-}
-
-/* Narrow model rows reserve the name column; action groups wrap below it. */
-@container workspace (max-width: 679px) {
- .models-model-row { grid-template-areas: "name size" "path path" "actions actions" "files files"; row-gap: 8px; }
 }

@@ -4,7 +4,7 @@ import type { Locale } from "../../shared/i18n/i18nCatalog";
 import { canBuildPrBackend, formatRuntimeVersion } from "../../shared/runtime/runtimeUtils";
 import { translate } from "../../shared/i18n/i18nUnified";
 import { finishTask, getTaskSnapshot, registerTask, type TaskState } from "../../shared/state/taskRegistry";
-import type { BackendRow } from "./runtimesHelpers";
+import { backendDisplayName, type BackendRow } from "./runtimesHelpers";
 import { notifyRuntimeInventoryChanged } from '../../shared/runtime/runtimeInventoryEvents';
 import { isIpcErrorKind } from "../../shared/api/ipcError";
 
@@ -17,7 +17,16 @@ function beginRuntimeTask(label: string, phase: string, installs = false): Runti
   // Each acquisition has its own cancel token: a late response cannot finish
   // a newer operation registered under the same shared task ID.
   const cancel = () => api.rtCancel();
-  const id = registerTask({ id: RUNTIME_TASK_ID, kind: "runtime", label, phase, interruptible: true, cancel, notifyOnComplete: installs ? "download" : undefined });
+  const id = registerTask({
+    id: RUNTIME_TASK_ID,
+    kind: "runtime",
+    downloadKind: installs ? "runtime" : undefined,
+    label,
+    phase,
+    interruptible: true,
+    cancel,
+    notifyOnComplete: installs ? "download" : undefined,
+  });
   return { id, cancel };
 }
 
@@ -53,14 +62,17 @@ export async function runInstall(
     deps.flashT(translate(deps.locale, "ui.stopBeforeRuntime"));
     return;
   }
-  const owner = beginRuntimeTask(`${translate(deps.locale, "ui.runtimeInstalling")} ${backend}`, translate(deps.locale, "ui.runtimeInstalling"), true);
+  const backendLabel = backendDisplayName(deps.locale, backend);
+  const buildLabel = formatRuntimeVersion(info.build);
+  const taskLabel = buildLabel ? `llama.cpp · ${backendLabel} · ${buildLabel}` : `llama.cpp · ${backendLabel}`;
+  const owner = beginRuntimeTask(taskLabel, "preparing", true);
   if (!owner) { deps.flashT(translate(deps.locale, "ui.runtimeOperationInProgress")); return; }
   deps.setFailure(null);
   setRows((previous) => previous.map((item) => item.backend === backend ? { ...item, busy: true } : item));
   try {
     const installed = await api.rtInstall(backend, info.build);
     notifyRuntimeInventoryChanged();
-    deps.flashT(translate(deps.locale, "ui.installedOk", { backend, build: formatRuntimeVersion(info.build, installed?.version) }));
+    deps.flashT(translate(deps.locale, "ui.installedOk", { backend: backendLabel, build: formatRuntimeVersion(info.build, installed?.version) }));
     await refresh();
     finishRuntimeTask(owner, "completed");
   } catch (error) {
@@ -98,7 +110,7 @@ export async function runExportRuntime(
   try {
     const info = await api.rtExport(backend, build);
     deps.flashT(translate(deps.locale, "ui.runtimeBundleExported", {
-      backend: info.backend,
+      backend: backendDisplayName(deps.locale, info.backend),
       build: formatRuntimeVersion(info.build, version),
       path: info.path,
       sha: info.archive_sha256,
@@ -140,7 +152,7 @@ export async function runImportRuntime(
   try {
     const installed = await api.rtImport();
     notifyRuntimeInventoryChanged();
-    deps.flashT(translate(deps.locale, "ui.runtimeBundleImported", { backend: installed.backend, build: formatRuntimeVersion(installed.build, installed.version) }));
+    deps.flashT(translate(deps.locale, "ui.runtimeBundleImported", { backend: backendDisplayName(deps.locale, installed.backend), build: formatRuntimeVersion(installed.build, installed.version) }));
     await refresh(true);
     finishRuntimeTask(owner, "completed");
   } catch (error) {
@@ -183,7 +195,7 @@ export async function runReviewPullRequest(
   // The backend refuses these before it downloads anything; say so without
   // a round trip, and keep it on screen instead of flashing it away.
   if (!canBuildPrBackend(backend)) {
-    deps.setFailure(translate(deps.locale, "ui.prBackendBlocked", { backend }));
+    deps.setFailure(translate(deps.locale, "ui.prBackendBlocked", { backend: backendDisplayName(deps.locale, backend) }));
     return;
   }
   if (deps.serverRunning) {
@@ -226,9 +238,10 @@ export async function runInstallPullRequest(state: PrInstallState, deps: CommonD
   // Pin the backend for the whole run: the busy flag has to be cleared on
   // the row it was set on, whatever the picker says by the time we finish.
   const { backend, source, preview } = state.pending;
+  const backendLabel = backendDisplayName(deps.locale, backend);
   if (!canBuildPrBackend(backend)) {
     state.setPrPreview(null);
-    deps.setFailure(translate(deps.locale, "ui.prBackendBlocked", { backend }));
+    deps.setFailure(translate(deps.locale, "ui.prBackendBlocked", { backend: backendLabel }));
     return;
   }
   if (deps.serverRunning) {
@@ -236,7 +249,9 @@ export async function runInstallPullRequest(state: PrInstallState, deps: CommonD
     deps.flashT(translate(deps.locale, "ui.stopBeforeRuntime"));
     return;
   }
-  const owner = beginRuntimeTask(`${translate(deps.locale, "ui.installingPr")} ${backend}`, translate(deps.locale, "ui.installingPr"), true);
+  const prNumber = preview.pull_request ?? source.replace(/^#/, "");
+  const prLabel = translate(deps.locale, "ui.runtimePrBuild", { pr: prNumber });
+  const owner = beginRuntimeTask(`llama.cpp · ${prLabel} · ${backendLabel}`, "resolving", true);
   if (!owner) {
     state.setPrPreview(null);
     deps.flashT(translate(deps.locale, "ui.runtimeOperationInProgress"));
@@ -254,8 +269,8 @@ export async function runInstallPullRequest(state: PrInstallState, deps: CommonD
     // whose name did not change. Say which commit went away.
     const replaced = installed.replaced;
     deps.flashT(replaced
-      ? translate(deps.locale, "ui.installedPrReplacedOk", { backend, pr: installed.source?.pull_request ?? source, previous: replaced.previous_commit.slice(0, 7) })
-      : translate(deps.locale, "ui.installedPrOk", { backend, pr: installed.source?.pull_request ?? source }));
+      ? translate(deps.locale, "ui.installedPrReplacedOk", { backend: backendLabel, pr: installed.source?.pull_request ?? source, previous: replaced.previous_commit.slice(0, 7) })
+      : translate(deps.locale, "ui.installedPrOk", { backend: backendLabel, pr: installed.source?.pull_request ?? source }));
     state.setPrSource("");
     await state.refresh();
     finishRuntimeTask(owner, "completed");

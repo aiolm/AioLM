@@ -46,6 +46,13 @@ export const BACKENDS = [
   { id: "cpu", label: "backendCpu", note: "noteCpu" },
 ] as const satisfies readonly { id: string; label: UiTextKey; note: UiTextKey }[];
 
+export function backendDisplayName(locale: Locale, backend: string): string {
+  const entry = BACKENDS.find((item) => item.id === backend);
+  return entry
+    ? translate(locale, `ui.${entry.label}`)
+    : translate(locale, "ui.unknownBackend", { id: backend });
+}
+
 export interface BackendRow {
   backend: string;
   label: UiTextKey;

@@ -34,8 +34,18 @@ export interface ModelUpdateResult {
 export const hfCheckModelUpdates = (paths: string[], modelsDir: string) =>
   invoke<ModelUpdateStatus[]>('hf_check_model_updates', { paths, modelsDir });
 
-export const hfUpdateModel = (path: string, modelsDir: string, expectedRevision: string) =>
-  invoke<ModelUpdateResult>('hf_update_model', { path, modelsDir, expectedRevision });
+export const hfUpdateModel = (
+  path: string,
+  modelsDir: string,
+  expectedRevision: string,
+  downloadId?: string,
+) =>
+  invoke<ModelUpdateResult>('hf_update_model', {
+    path,
+    modelsDir,
+    expectedRevision,
+    ...(downloadId !== undefined ? { downloadId } : {}),
+  });
 
 /**
  * Orders the Hugging Face model listing can be ranked in. These are the

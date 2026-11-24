@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { notifyCompletion } from "../lib/notifications";
-import { finishTask, getTaskSnapshot, registerTask, removeTask, TASK_CLEAR_DELAY_MS, updateTask, type TaskKind } from "./taskRegistry";
+import { finishTask, getDownloadCenterSnapshot, getModelDownloadSnapshot, getTaskSnapshot, registerTask, removeTask, subscribeTasks, TASK_CLEAR_DELAY_MS, updateTask, type TaskKind } from "./taskRegistry";
 
 vi.mock("../lib/notifications", () => ({ notifyCompletion: vi.fn(async () => undefined) }));
 
@@ -150,5 +150,62 @@ describe("task clearing after reuse", () => {
     vi.advanceTimersByTime(1);
     expect(task()).toBeUndefined();
     expect(notifyMock.mock.calls).toEqual(terminal === "completed" ? [["download"]] : []);
+  });
+});
+
+describe("snapshot isolation and no-op update skipping", () => {
+  it("skips publishing identical updateTask patches and keeps modelDownloadSnapshot stable on runtime updates", () => {
+    start("runtime-operation", "runtime", { phase: "downloading", received: 10, total: 100 });
+    start("model-download:dl-1", "model-download", { phase: "downloading", received: 5, total: 50 });
+
+    const initialDownloads = getModelDownloadSnapshot();
+    const listener = vi.fn();
+    const unsubscribe = subscribeTasks(listener);
+    try {
+      // Identical patch must not notify subscribers.
+      updateTask("runtime-operation", { phase: "downloading", received: 10, total: 100 });
+      expect(listener).not.toHaveBeenCalled();
+
+      // Updating a runtime task publishes a new global snapshot, but keeps modelDownloadSnapshot reference identical.
+      updateTask("runtime-operation", { received: 20 });
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(getModelDownloadSnapshot()).toBe(initialDownloads);
+      expect(getTaskSnapshot().find(item => item.id === "runtime-operation")?.received).toBe(20);
+
+      // Updating a model download replaces modelDownloadSnapshot.
+      updateTask("model-download:dl-1", { received: 25 });
+      expect(listener).toHaveBeenCalledTimes(2);
+      expect(getModelDownloadSnapshot()).not.toBe(initialDownloads);
+      expect(getModelDownloadSnapshot().find(item => item.id === "model-download:dl-1")?.received).toBe(25);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("includes runtime downloads in downloadCenterSnapshot without polluting modelDownloadSnapshot", () => {
+    start("model-download:dl-1", "model-download", { phase: "downloading", received: 5, total: 50 });
+    const initialModelDownloads = getModelDownloadSnapshot();
+
+    // Non-download runtime work (e.g. export/import/verification) stays outside DownloadsCenter.
+    start("runtime-export", "runtime", { phase: "packaging" });
+    expect(getDownloadCenterSnapshot().map(item => item.id)).toEqual(["model-download:dl-1"]);
+
+    vi.advanceTimersByTime(10);
+    start("runtime-operation", "runtime", { downloadKind: "runtime", phase: "downloading", received: 100, total: 1000 });
+    expect(getModelDownloadSnapshot()).toBe(initialModelDownloads);
+    expect(getDownloadCenterSnapshot().map(item => item.id)).toEqual(["runtime-operation", "model-download:dl-1"]);
+
+    updateTask("runtime-operation", { received: 250, speedBps: 1024 });
+    expect(getModelDownloadSnapshot()).toBe(initialModelDownloads);
+    expect(getDownloadCenterSnapshot().find(item => item.id === "runtime-operation")?.speedBps).toBe(1024);
+
+    vi.advanceTimersByTime(10);
+    start("app-update-download", "other", { downloadKind: "app-update", phase: "downloading", received: 10, total: 100 });
+    expect(getModelDownloadSnapshot()).toBe(initialModelDownloads);
+    expect(getDownloadCenterSnapshot().map(item => item.id)).toEqual([
+      "app-update-download",
+      "runtime-operation",
+      "model-download:dl-1",
+    ]);
   });
 });

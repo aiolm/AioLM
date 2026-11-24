@@ -1,76 +1,126 @@
-import { useEffect } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import * as api from "../api/index";
-import { estimateDownloadSpeed, type DownloadSample } from "../lib/transfer";
-import { finishTask, getTaskSnapshot, registerTask, updateTask, useTasks, type AppTask } from "./taskRegistry";
+import { appendDownloadSample, estimateDownloadSpeed, type DownloadSample } from "../lib/transfer";
+import {
+  finishTask,
+  getModelDownloadSnapshot,
+  getTaskSnapshot,
+  registerTask,
+  subscribeTasks,
+  updateTask,
+  type AppTask,
+} from "./taskRegistry";
 
 export const MODEL_DOWNLOAD_TASK_ID = "model-download";
+const MODEL_DOWNLOAD_PREFIX = `${MODEL_DOWNLOAD_TASK_ID}:`;
 
-/** Enough samples to smooth a rate without lagging behind a real slowdown. */
-const MAX_SPEED_SAMPLES = 30;
+let downloadCounter = 0;
+
+export function createDownloadId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  downloadCounter += 1;
+  return `dl-${Date.now()}-${downloadCounter}`;
+}
+
+export function modelDownloadTaskId(downloadId: string): string {
+  const trimmed = downloadId.trim();
+  return trimmed ? `${MODEL_DOWNLOAD_PREFIX}${trimmed}` : MODEL_DOWNLOAD_TASK_ID;
+}
+
+export function downloadIdFromTaskId(taskId: string): string | undefined {
+  return taskId.startsWith(MODEL_DOWNLOAD_PREFIX)
+    ? taskId.slice(MODEL_DOWNLOAD_PREFIX.length) || undefined
+    : undefined;
+}
+
+export function isDownloadTaskActive(task: Pick<AppTask, "state">): boolean {
+  return task.state === "running" || task.state === "cancelling";
+}
+
+export function resolveDownloadTaskId(downloadId?: string): string {
+  const trimmed = downloadId?.trim();
+  return trimmed ? modelDownloadTaskId(trimmed) : MODEL_DOWNLOAD_TASK_ID;
+}
 
 /** Turn one progress event into the fields the task row shows. */
 function downloadTaskPatch(
   next: api.ModelDownloadProgress,
   samples: DownloadSample[],
+  existing?: AppTask,
 ): Partial<Omit<AppTask, "id">> {
+  const estimated = next.phase === "downloading" ? estimateDownloadSpeed(samples) : null;
   return {
-    label: next.file_path || next.repo_id,
+    label: existing?.label || next.file_path || next.repo_id,
+    ...(existing ? {} : { repoId: next.repo_id, filePath: next.file_path }),
     phase: next.phase,
     received: next.received,
     total: next.total,
-    speedBps: next.phase === "downloading" ? estimateDownloadSpeed(samples) ?? undefined : undefined,
+    speedBps:
+      next.phase === "downloading"
+        ? (estimated ?? (existing?.phase === "downloading" ? existing.speedBps : undefined))
+        : undefined,
   };
 }
 
 /**
- * Own the model-download progress stream for the whole app.
- *
- * This used to live inside the Discover panel and unsubscribed whenever that
- * panel stopped being the active view, so walking to another page during a
- * multi-gigabyte download lost the progress, the speed, and the cancel button.
- * The download itself never stopped — only the report did. Holding the
- * subscription at app level and publishing it as a task keeps it visible in the
- * bottom strip from anywhere, and lets Discover read the same record rather
- * than keeping a second copy of it.
+ * Own the model-download progress stream for the whole app, routing each
+ * `download_id` to its own task so concurrent transfers keep independent progress,
+ * speed, and pause/cancel controls across every view.
  */
 export function useModelDownloadTask(): void {
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    let samples: DownloadSample[] = [];
-    void api.onModelDownloadProgress((next) => {
-      if (disposed) return;
-      if (next.phase === "complete" || next.phase === "cancelled") {
-        samples = [];
-        finishTask(MODEL_DOWNLOAD_TASK_ID, next.phase === "complete" ? "completed" : "cancelled");
-        return;
-      }
-      samples = next.phase === "downloading"
-        ? [...samples, { received: next.received, at: Date.now() }].slice(-MAX_SPEED_SAMPLES)
-        : [];
-      const patch = downloadTaskPatch(next, samples);
-      // A row already on screen is patched in place, so restarting a download
-      // cannot leave a stale row behind or open a second one.
-      const current = getTaskSnapshot().find((task) => task.id === MODEL_DOWNLOAD_TASK_ID);
-      if (current) {
-        updateTask(MODEL_DOWNLOAD_TASK_ID, { ...patch, detail: undefined, state: current.state === 'cancelling' ? 'cancelling' : 'running' });
-      } else {
-        registerTask({
-          id: MODEL_DOWNLOAD_TASK_ID,
-          kind: "model-download",
-          label: "",
-          interruptible: true,
-          pausable: true,
-          cancel: () => api.hfCancelDownload(),
-          ...patch,
-        });
-      }
-    }).then((cleanup) => {
-      if (disposed) cleanup();
-      else unlisten = cleanup;
-    }).catch(() => {
-      // Browser preview does not expose native download progress events.
-    });
+    const samplesByTask = new Map<string, DownloadSample[]>();
+    void api
+      .onModelDownloadProgress((next) => {
+        if (disposed) return;
+        const rawId = next.download_id?.trim() || undefined;
+        const taskId = resolveDownloadTaskId(rawId);
+        if (next.phase === "complete" || next.phase === "cancelled") {
+          samplesByTask.delete(taskId);
+          finishTask(taskId, next.phase === "complete" ? "completed" : "cancelled");
+          return;
+        }
+        const prevSamples = samplesByTask.get(taskId) ?? [];
+        const samples =
+          next.phase === "downloading"
+            ? appendDownloadSample(prevSamples, next.received, Date.now())
+            : [];
+        if (samples.length > 0) {
+          samplesByTask.set(taskId, samples);
+        } else {
+          samplesByTask.delete(taskId);
+        }
+        const current = getTaskSnapshot().find((task) => task.id === taskId);
+        const patch = downloadTaskPatch(next, samples, current);
+        if (current) {
+          updateTask(taskId, {
+            ...patch,
+            detail: undefined,
+            state: current.state === "cancelling" ? "cancelling" : "running",
+          });
+        } else {
+          registerTask({
+            id: taskId,
+            kind: "model-download",
+            label: next.file_path || next.repo_id,
+            interruptible: true,
+            pausable: true,
+            cancel: () => api.hfCancelDownload(rawId),
+            ...patch,
+          });
+        }
+      })
+      .then((cleanup) => {
+        if (disposed) cleanup();
+        else unlisten = cleanup;
+      })
+      .catch(() => {
+        // Browser preview does not expose native download progress events.
+      });
     return () => {
       disposed = true;
       unlisten?.();
@@ -78,7 +128,20 @@ export function useModelDownloadTask(): void {
   }, []);
 }
 
-/** The live download row, for panels that show their own detailed view of it. */
+export function getModelDownloadTasks(): AppTask[] {
+  return getModelDownloadSnapshot();
+}
+
+export function hasActiveModelDownload(): boolean {
+  return getModelDownloadSnapshot().some(isDownloadTaskActive);
+}
+
+export function useModelDownloads(): AppTask[] {
+  return useSyncExternalStore(subscribeTasks, getModelDownloadSnapshot, getModelDownloadSnapshot);
+}
+
+/** First active download (or most recent download task) for single-slot callers. */
 export function useModelDownload(): AppTask | undefined {
-  return useTasks().find((task) => task.id === MODEL_DOWNLOAD_TASK_ID);
+  const downloads = useModelDownloads();
+  return downloads.find(isDownloadTaskActive) ?? downloads[0];
 }

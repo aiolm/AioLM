@@ -1324,6 +1324,7 @@ async fn apply_plan<F: FnMut(&str, u64, u64)>(
 
 pub async fn update_model(
     app: AppHandle,
+    download_id: &str,
     path: &str,
     models_dir: &str,
     expected_revision: &str,
@@ -1350,7 +1351,9 @@ pub async fn update_model(
     let result = apply_plan(
         plan,
         cancel,
-        |phase, received, total| emit_progress(&app, &repository, path, phase, received, total),
+        |phase, received, total| {
+            emit_progress(&app, download_id, &repository, path, phase, received, total)
+        },
         &TransferSource::Hub,
     )
     .await;
@@ -1358,7 +1361,15 @@ pub async fn update_model(
         .as_ref()
         .is_err_and(|error| error.kind == ErrorKind::Cancelled)
     {
-        emit_progress(&app, &repository, path, "cancelled", 0, download_bytes);
+        emit_progress(
+            &app,
+            download_id,
+            &repository,
+            path,
+            "cancelled",
+            0,
+            download_bytes,
+        );
     }
     result
 }

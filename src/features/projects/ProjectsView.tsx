@@ -39,9 +39,9 @@ export default function ProjectsView({ controller }: { controller: ProjectsContr
           <h1 className="app-page-title">{t("ui.projectsTitle")}</h1>
           <p className="app-page-description" >{t("ui.projectsDescription")}</p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <button type="button" onClick={newProject} className="app-button app-button--primary app-button--sm">{t("panel.newProject")}</button>
-          {api.isNativeRuntimeAvailable() ? <button type="button" data-icon="upload" onClick={() => void importSelected()} disabled={importing} className="app-button app-button--secondary app-button--sm">{t("panel.importJson")}</button> : <label data-icon="upload" className="app-button app-button--secondary app-button--sm cursor-pointer has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--ui-focus)]">
+        <div className="app-page-actions">
+          <button type="button" onClick={newProject} className="app-button app-button--primary">{t("panel.newProject")}</button>
+          {api.isNativeRuntimeAvailable() ? <button type="button" data-icon="upload" onClick={() => void importSelected()} disabled={importing} className="app-button app-button--secondary">{t("panel.importJson")}</button> : <label data-icon="upload" className="app-button app-button--secondary cursor-pointer has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--ui-focus)]">
             {t("panel.importJson")}
             <input
               type="file"
@@ -86,20 +86,23 @@ export default function ProjectsView({ controller }: { controller: ProjectsContr
       />
       <div className="projects-workspace app-master-detail grid flex-1">
         <aside className="projects-list" aria-labelledby="projects-list-title">
-          <h2 id="projects-list-title" className="px-2 pb-3 text-sm font-semibold ui-color-ink">{t("ui.savedProjectsCount")} <span className="text-xs font-normal ui-color-muted">· {projects.length}</span></h2>
+          <div className="projects-list-header">
+            <h2 id="projects-list-title" className="app-section-title">{t("ui.savedProjectsCount")}</h2>
+            <span className="models-list-count">{projects.length}</span>
+          </div>
           <div className="projects-list-items space-y-1">
             {projects.length === 0 && <EmptyState title={t("panel.noProjects")} description={t("ui.projectsEmptyHint")} />}
-            {projects.map((project) => <div key={project.id} className={`app-list-row flex items-center justify-between gap-1 px-1 py-1 ${project.id === selectedId ? "is-selected" : ""}`}><button type="button" onClick={() => selectProject(project)} aria-current={project.id === selectedId ? "true" : undefined} className="app-list-row__action w-full min-w-0 flex-col items-start overflow-hidden"><span className="block w-full max-w-full min-w-0 [overflow-wrap:anywhere] text-xs font-medium ui-color-ink" >{project.name}</span><span className="mt-0.5 block w-full max-w-full min-w-0 [overflow-wrap:anywhere] text-xs ui-color-faint" ><ModelIcon model={project.config.active_model} />{<ModelName model={project.config.active_model} empty={t("ui.noModelShort")} />}</span><ModelBadges mode="compact" model={project.config.active_model} localPath={project.config.active_model} /><span className="mt-0.5 block w-full max-w-full min-w-0 [overflow-wrap:anywhere] text-xs ui-color-faint" >{project.description || t("ui.projectToolsDocsSummary", { tools: project.toolIds.length, docs: project.documentBindings.length })}</span></button>{project.id === activeId && <Badge tone="success" className="mr-1 shrink-0">{t("ui.active")}</Badge>}</div>)}
+            {projects.map((project) => <div key={project.id} className={`app-list-row projects-list-row flex items-center justify-between gap-1 ${project.id === selectedId ? "is-selected" : ""}`}><button type="button" onClick={() => selectProject(project)} aria-current={project.id === selectedId ? "true" : undefined} className="app-list-row__action w-full min-w-0 flex-col items-start overflow-hidden"><span className="block w-full max-w-full min-w-0 [overflow-wrap:anywhere] text-xs font-medium ui-color-ink" >{project.name}</span><span className="projects-model-line" ><ModelIcon model={project.config.active_model} /><span><ModelName model={project.config.active_model} empty={t("ui.noModelShort")} /></span></span><ModelBadges mode="compact" model={project.config.active_model} localPath={project.config.active_model} /><span className="mt-0.5 block w-full max-w-full min-w-0 [overflow-wrap:anywhere] text-xs ui-color-faint" >{project.description || t("ui.projectToolsDocsSummary", { tools: project.toolIds.length, docs: project.documentBindings.length })}</span></button>{project.id === activeId && <Badge tone="success" className="shrink-0">{t("ui.active")}</Badge>}</div>)}
           </div>
         </aside>
         <section className="projects-editor" aria-labelledby="project-editor-title">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+          <div className="projects-editor-header">
             <h2 id="project-editor-title" className="app-section-title">{selected ? t("ui.projectEditorEdit") : t("ui.projectEditorNew")}</h2>
             {isActiveSelection && <div className="flex flex-wrap items-center gap-2"><Badge tone="success">{t("ui.active")}</Badge><button type="button" onClick={deactivate} className="app-button app-button--ghost app-button--sm">{t("ui.deactivate")}</button></div>}
           </div>
-          <div className="mt-3 grid gap-3 app-form-grid">
-            <label className="text-xs ui-color-muted" >{t("ui.fieldProjectName")}<input value={name} onChange={(event) => setName(event.target.value)} placeholder={t("panel.projectNamePlaceholder")} className="app-input mt-1" /></label>
-            <label className="text-xs ui-color-muted" >{t("ui.fieldDescription")}<input value={description} onChange={(event) => setDescription(event.target.value)} placeholder={t("ui.fieldDescriptionPlaceholder")} className="app-input mt-1" /></label>
+          <div className="grid gap-3 app-form-grid">
+            <label className="projects-field" >{t("ui.fieldProjectName")}<input value={name} onChange={(event) => setName(event.target.value)} placeholder={t("panel.projectNamePlaceholder")} className="app-input" /></label>
+            <label className="projects-field" >{t("ui.fieldDescription")}<input value={description} onChange={(event) => setDescription(event.target.value)} placeholder={t("ui.fieldDescriptionPlaceholder")} className="app-input" /></label>
           </div>
           <h3 className="app-section-title mt-6">{t("ui.projectProfileLabel")}</h3>
           <section aria-label={t("ui.fieldSystemPrompt")} data-testid="project-prompt-preview" className="projects-profile-summary">
@@ -110,10 +113,10 @@ export default function ProjectsView({ controller }: { controller: ProjectsContr
               </span>
               <button type="button" data-icon="edit" onClick={openProjectEditor} disabled={!canOpenProjectEditor} className="app-button app-button--secondary app-button--sm">{t("ui.projectEditPrompt")}</button>
             </div>
-            <dl className="mt-3 space-y-1.5 text-xs">
-              <div className="flex gap-2"><dt className="w-20 shrink-0 ui-color-muted">{t("ui.fieldModelPath")}</dt><dd className="min-w-0 flex-1 truncate ui-color-ink" title={normalizeDisplayPath(displayConfig?.active_model ?? '')}><ModelIcon model={displayConfig?.active_model ?? ''} />{<ModelName model={displayConfig?.active_model} empty={t("load.noModel")} />}<ModelBadges mode="compact" model={displayConfig?.active_model ?? ''} localPath={displayConfig?.active_model ?? ''} /></dd></div>
-              <div className="flex gap-2"><dt className="w-20 shrink-0 ui-color-muted">{t("ui.fieldBackend")}</dt><dd className="min-w-0 app-text-wrap ui-color-ink"><RuntimeSelectionLabel config={displayConfig} separator=" · " /></dd></div>
-              <div className="flex gap-2"><dt className="w-20 shrink-0 ui-color-muted">{t("ui.fieldContext")}</dt><dd className="min-w-0 app-text-wrap ui-color-ink">{providerOf(displayConfig ?? {}) !== 'llama.cpp'
+            <dl className="projects-profile-facts">
+              <div><dt>{t("ui.fieldModelPath")}</dt><dd className="projects-profile-model-cell" title={normalizeDisplayPath(displayConfig?.active_model ?? '')}><span className="projects-profile-model"><ModelIcon model={displayConfig?.active_model ?? ''} /><span><ModelName model={displayConfig?.active_model} empty={t("load.noModel")} /></span></span><ModelBadges mode="compact" model={displayConfig?.active_model ?? ''} localPath={displayConfig?.active_model ?? ''} /></dd></div>
+              <div><dt>{t("ui.fieldBackend")}</dt><dd className="min-w-0 app-text-wrap ui-color-ink"><RuntimeSelectionLabel config={displayConfig} separator=" · " /></dd></div>
+              <div><dt>{t("ui.fieldContext")}</dt><dd className="min-w-0 app-text-wrap ui-color-ink">{providerOf(displayConfig ?? {}) !== 'llama.cpp'
                 ? providerOf(displayConfig ?? {}) === 'vllm' && typeof displayConfig?.provider_options?.vllm?.max_model_len === 'number' && displayConfig.provider_options.vllm.max_model_len > 0
                   ? displayConfig.provider_options.vllm.max_model_len.toLocaleString() : providerCopy[locale].inherit
                 : displayConfig?.runtime_defaults?.includes("ctx_size") ? <DefaultValue info={settingDefaultInfo("ctx_size", SERVER_OPTIONS, false, locale, { selected: true })} /> : displayConfig?.ctx_size.toLocaleString()}</dd></div>
@@ -124,36 +127,36 @@ export default function ProjectsView({ controller }: { controller: ProjectsContr
           <section className="mt-6 border-t pt-4 ui-border-color-border" aria-labelledby="project-workspace-title">
             <h3 id="project-workspace-title" className="app-section-title">{t("panel.chatWorkspace")}</h3>
             <p className="mt-1 text-xs ui-color-muted">{t("ui.projectChatLimitsHint")}</p>
-            <div className="mt-3 grid gap-4 app-form-grid">
-              <div className="flex min-w-0 flex-col">
+            <div className="projects-workspace-columns">
+              <div className="projects-workspace-column">
                 <div className="flex items-baseline justify-between gap-2 text-xs ui-color-muted">
                   <span id="project-mcp-heading">{t("ui.fieldToolIds")}</span>
-                  <span className="ui-color-faint">{toolCount}</span>
+                  <span className="tabular-nums ui-color-faint">{toolCount}</span>
                 </div>
-                <p className="mt-1 min-h-8 text-xs ui-color-muted">{t("ui.projectMcpHint")}</p>
-                <div className="mt-2 flex flex-wrap gap-2">
+                <p className="text-xs ui-color-muted">{t("ui.projectMcpHint")}</p>
+                <div className="flex flex-wrap gap-2">
                   <button type="button" data-icon="refresh" onClick={() => void loadMcpCatalog(false)} disabled={mcpLoading} className="app-button app-button--secondary app-button--sm"><StableLabel value={mcpLoading ? t("ui.projectMcpLoading") : t("ui.projectRefreshTools")} labels={[t("ui.projectMcpLoading"), t("ui.projectRefreshTools")]} /></button>
                 </div>
-                <div role="group" aria-labelledby="project-mcp-heading" className="projects-selection-list mt-2 space-y-1">
+                <div role="group" aria-labelledby="project-mcp-heading" className="projects-selection-list space-y-1">
                   {mcpCatalog.length === 0 && !mcpLoading && <p className="px-1 py-1 text-xs ui-color-faint">{t("ui.projectNoMcpTools")}</p>}
                   {mcpCatalog.map((entry) => {
                     const checked = selectedToolKeys.has(entry.key);
                     const label = `${normalizeDisplayText(entry.serverName)} · ${normalizeDisplayText(entry.toolName)}`;
-                    return <label key={entry.key} className="flex max-w-full items-center gap-1.5 text-xs ui-color-muted"><input type="checkbox" checked={checked} onChange={() => toggleTool(entry.key)} /><span className="min-w-0 flex-1 app-text-wrap" title={entry.key}>{label}</span></label>;
+                    return <label key={entry.key} className="flex max-w-full items-center gap-1.5 px-1 py-1 text-xs ui-color-muted"><input type="checkbox" checked={checked} onChange={() => toggleTool(entry.key)} /><span className="min-w-0 flex-1 app-text-wrap" title={entry.key}>{label}</span></label>;
                   })}
-                  {staleTools.map((key) => <label key={key} className="flex max-w-full items-center gap-1.5 text-xs ui-color-muted"><input type="checkbox" checked onChange={() => toggleTool(key)} /><span className="min-w-0 flex-1 app-text-wrap" title={key}>{key} · {t("ui.projectUnavailable")}</span></label>)}
+                  {staleTools.map((key) => <label key={key} className="flex max-w-full items-center gap-1.5 px-1 py-1 text-xs ui-color-muted"><input type="checkbox" checked onChange={() => toggleTool(key)} /><span className="min-w-0 flex-1 app-text-wrap" title={key}>{key} · {t("ui.projectUnavailable")}</span></label>)}
                 </div>
               </div>
-              <div className="flex min-w-0 flex-col">
+              <div className="projects-workspace-column">
                 <div className="flex items-baseline justify-between gap-2 text-xs ui-color-muted">
                   <span id="project-documents-heading">{t("ui.fieldDocuments")}</span>
-                  <span className="ui-color-faint">{docCount}/{MAX_PROJECT_DOCUMENTS}</span>
+                  <span className="tabular-nums ui-color-faint">{docCount}/{MAX_PROJECT_DOCUMENTS}</span>
                 </div>
-                <p className="mt-1 min-h-8 text-xs ui-color-muted">{t("ui.projectDocumentsHint")}</p>
-                <div className="mt-2">
+                <p className="text-xs ui-color-muted">{t("ui.projectDocumentsHint")}</p>
+                <div className="flex flex-wrap gap-2">
                   <button type="button" data-icon="add" onClick={() => void addDocument()} disabled={docCount >= MAX_PROJECT_DOCUMENTS} className="app-button app-button--secondary app-button--sm">{t("ui.projectAddDocument")}</button>
                 </div>
-                <div role="group" aria-labelledby="project-documents-heading" className="projects-selection-list mt-2 space-y-1">
+                <div role="group" aria-labelledby="project-documents-heading" className="projects-selection-list space-y-1">
                   {documents.length === 0 && <p className="px-1 py-1 text-xs ui-color-faint">{t("ui.projectNoDocuments")}</p>}
                   {documents.map((document) => <div key={document.path} className="flex items-center justify-between gap-2 px-1 py-1"><span className="min-w-0 flex-1 truncate text-xs ui-color-ink" title={normalizeDisplayPath(document.path)}>{normalizeDisplayText(document.name)} <span className="ui-color-faint">· {normalizeDisplayPath(document.path)}</span></span><button type="button" onClick={() => removeDocument(document.path)} aria-label={t("ui.projectRemoveDocument", { name: document.name })} className="app-icon-button app-icon-button--sm app-icon-button--danger"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button></div>)}
                 </div>
@@ -164,8 +167,8 @@ export default function ProjectsView({ controller }: { controller: ProjectsContr
             <h3 id="project-save-title" className="app-section-title">{t("panel.save")} / {t("panel.apply")}</h3>
             <p className="mt-1 text-xs ui-color-muted">{t("ui.projectSaveApplyHint")}</p>
           <div className="projects-editor-actions mt-3">
-            <button type="button" onClick={() => save()} disabled={!name.trim() || !cfg} title={!name.trim() ? t("ui.nameRequired") : undefined} className="app-button app-button--primary app-button--sm"><StableLabel value={selected ? t("panel.updateProject") : t("panel.saveProject")} labels={[t("panel.updateProject"), t("panel.saveProject")]} /></button>
-            {selected && <><button type="button" data-icon="play" onClick={() => void apply(selected)} disabled={serverRunning || busy} title={serverRunning ? t("ui.stopBeforeApplyProject") : undefined} className="app-button app-button--secondary app-button--sm">{t("panel.applyRuntime")}</button><button type="button" data-icon="download" onClick={() => void exportSelected(selected)} disabled={exporting} className="app-button app-button--secondary app-button--sm">{t("panel.exportJson")}</button><button type="button" data-icon="delete" onClick={() => remove(selected)} className="app-button app-button--danger app-button--sm">{t("panel.delete")}</button></>}
+            <button type="button" onClick={() => save()} disabled={!name.trim() || !cfg} title={!name.trim() ? t("ui.nameRequired") : undefined} className="app-button app-button--primary"><StableLabel value={selected ? t("panel.updateProject") : t("panel.saveProject")} labels={[t("panel.updateProject"), t("panel.saveProject")]} /></button>
+            {selected && <><button type="button" data-icon="play" onClick={() => void apply(selected)} disabled={serverRunning || busy} title={serverRunning ? t("ui.stopBeforeApplyProject") : undefined} className="app-button app-button--secondary">{t("panel.applyRuntime")}</button><button type="button" data-icon="download" onClick={() => void exportSelected(selected)} disabled={exporting} className="app-button app-button--secondary">{t("panel.exportJson")}</button><button type="button" data-icon="delete" onClick={() => remove(selected)} className="app-button app-button--danger">{t("panel.delete")}</button></>}
           </div>
             <p className="mt-2 text-xs ui-color-faint">{t("ui.projectsFooter")}</p>
           </section>

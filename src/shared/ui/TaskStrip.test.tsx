@@ -248,7 +248,13 @@ describe("task cancellation ownership", () => {
     const left = (time: string) => `${time} left`;
     // Before a rate is known there is no countdown to show.
     expect(transferLabel({ ...defined(getTaskSnapshot()[0], 'download task'), speedBps: undefined }, left)).not.toContain("left");
+    // A momentary stall preserves a 0 B/s readout without claiming an ETA.
+    expect(transferLabel({ ...defined(getTaskSnapshot()[0], 'download task'), speedBps: 0 }, left)).toContain("0 B/s");
+    expect(transferLabel({ ...defined(getTaskSnapshot()[0], 'download task'), speedBps: 0 }, left)).not.toContain("left");
+    // Unknown total size still shows transferred bytes and speed without an ETA.
+    expect(transferLabel({ ...defined(getTaskSnapshot()[0], 'download task'), received: 1024, total: 0, speedBps: 512 }, left)).toBe("1.0 KiB · 512 B/s");
     // A task with no byte counts shows no transfer line at all.
+    expect(transferLabel({ ...defined(getTaskSnapshot()[0], 'download task'), received: 0, total: 0 }, left)).toBeNull();
     expect(transferLabel({ ...defined(getTaskSnapshot()[0], 'download task'), received: undefined }, left)).toBeNull();
   });
   it("keeps model launch progress and saved-settings recovery outside ordinary activity details", () => {

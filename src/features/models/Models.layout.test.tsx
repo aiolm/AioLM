@@ -578,4 +578,20 @@ describe('model folder persistence', () => {
     await act(async () => finishRescan(initial));
     await waitFor(() => expect(screen.getByRole("button", { name: "Rescan" })).toBeVisible());
   });
+
+  it("clears scanning state when deactivating the panel while an initial scan is in flight", async () => {
+    let finishScan!: (value: { models: api.GgufModel[]; truncated: boolean }) => void;
+    vi.mocked(api.listModels).mockImplementationOnce(() => new Promise((resolve) => { finishScan = resolve; }));
+    const base = createTestStore({ active_model: "", models_dir: "C:/Models" });
+    const view = render(<I18nProvider initialLocale="en"><ModelsPanel store={base} compact active onSelectModel={vi.fn()} /></I18nProvider>);
+
+    expect(await screen.findByRole("button", { name: "Cancel scan" })).toBeVisible();
+    view.rerender(<I18nProvider initialLocale="en"><ModelsPanel store={base} compact active={false} onSelectModel={vi.fn()} /></I18nProvider>);
+    expect(api.cancelModelScan).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "Cancel scan" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Rescan" })).toBeVisible();
+
+    await act(async () => finishScan({ models: [], truncated: false }));
+    expect(screen.getByRole("button", { name: "Rescan" })).toBeVisible();
+  });
 });

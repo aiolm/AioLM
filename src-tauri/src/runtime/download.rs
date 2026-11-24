@@ -1,5 +1,8 @@
 use super::*;
 
+const DOWNLOAD_BUFFER_BYTES: usize = 1024 * 1024;
+pub(super) const DOWNLOAD_PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
+
 fn download_error(error: &reqwest::Error, message: String) -> AppError {
     if error.is_timeout() {
         AppError::timeout(message)
@@ -100,9 +103,10 @@ pub async fn download_verified(
     }
     let mut stream = response.bytes_stream();
     let partial = path.with_extension("part");
-    let mut file = tokio::fs::File::create(&partial)
+    let file = tokio::fs::File::create(&partial)
         .await
         .map_err(|error| AppError::from_io(&error))?;
+    let mut writer = tokio::io::BufWriter::with_capacity(DOWNLOAD_BUFFER_BYTES, file);
     let mut written: u64 = 0;
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|error| {
@@ -113,19 +117,22 @@ pub async fn download_verified(
         })?;
         written += chunk.len() as u64;
         if written > expected_bytes {
+            drop(writer);
             let _ = tokio::fs::remove_file(&partial).await;
             return Err(AppError::validation(
                 "verification model is larger than its pinned size",
             ));
         }
-        file.write_all(&chunk)
+        writer
+            .write_all(&chunk)
             .await
             .map_err(|error| AppError::from_io(&error))?;
     }
-    file.flush()
+    writer
+        .flush()
         .await
         .map_err(|error| AppError::from_io(&error))?;
-    drop(file);
+    drop(writer);
     if written != expected_bytes {
         let _ = tokio::fs::remove_file(&partial).await;
         return Err(AppError::validation(format!(
@@ -221,6 +228,27 @@ pub(super) async fn download_request_to_file(
     cancel: &Arc<AtomicBool>,
     validate_response_url: impl FnOnce(&str) -> Result<(), AppError>,
 ) -> Result<(), AppError> {
+    download_request_to_file_with_interval(
+        progress,
+        phase,
+        request,
+        path,
+        cancel,
+        validate_response_url,
+        DOWNLOAD_PROGRESS_INTERVAL,
+    )
+    .await
+}
+
+pub(super) async fn download_request_to_file_with_interval(
+    progress: ProgressSink<'_>,
+    phase: &str,
+    request: reqwest::RequestBuilder,
+    path: &Path,
+    cancel: &Arc<AtomicBool>,
+    validate_response_url: impl FnOnce(&str) -> Result<(), AppError>,
+    interval: Duration,
+) -> Result<(), AppError> {
     let response = tokio::select! {
         biased;
         _ = crate::cancellation::wait_cancelled(cancel) => {
@@ -249,21 +277,44 @@ pub(super) async fn download_request_to_file(
         ));
     }
     let total = response.content_length().unwrap_or(0);
-    let mut output = tokio::fs::File::create(path)
+    let output = tokio::fs::File::create(path)
         .await
         .map_err(|error| AppError::from_io(&error))?;
+    let mut output = tokio::io::BufWriter::with_capacity(DOWNLOAD_BUFFER_BYTES, output);
     let mut received = 0_u64;
+    let mut reported = 0_u64;
+    let mut reported_at = tokio::time::Instant::now();
     let mut stream = response;
     loop {
-        let chunk = tokio::select! {
-            biased;
-            _ = crate::cancellation::wait_cancelled(cancel) => {
-                return Err(AppError::cancelled("runtime install cancelled"));
+        let next = stream.chunk();
+        tokio::pin!(next);
+        let chunk = loop {
+            if received == reported {
+                tokio::select! {
+                    biased;
+                    _ = crate::cancellation::wait_cancelled(cancel) => {
+                        return Err(AppError::cancelled("runtime install cancelled"));
+                    }
+                    chunk = &mut next => break chunk,
+                }
+            } else {
+                tokio::select! {
+                    biased;
+                    _ = crate::cancellation::wait_cancelled(cancel) => {
+                        return Err(AppError::cancelled("runtime install cancelled"));
+                    }
+                    chunk = &mut next => break chunk,
+                    () = tokio::time::sleep_until(reported_at + interval) => {
+                        progress(phase, received as f64, total as f64);
+                        reported = received;
+                        reported_at = tokio::time::Instant::now();
+                    }
+                }
             }
-            chunk = stream.chunk() => chunk.map_err(|error| {
-                download_error(&error, format!("runtime download stream failed: {error}"))
-            })?,
-        };
+        }
+        .map_err(|error| {
+            download_error(&error, format!("runtime download stream failed: {error}"))
+        })?;
         let Some(chunk) = chunk else {
             break;
         };
@@ -277,7 +328,12 @@ pub(super) async fn download_request_to_file(
             ));
         }
         write_download_chunk(&mut output, &chunk).await?;
-        progress(phase, received as f64, total as f64);
+        let now = tokio::time::Instant::now();
+        if received != reported && (reported == 0 || now >= reported_at + interval) {
+            progress(phase, received as f64, total as f64);
+            reported = received;
+            reported_at = now;
+        }
     }
     if cancel.load(Ordering::Acquire) {
         return Err(AppError::cancelled("runtime install cancelled"));
@@ -286,11 +342,14 @@ pub(super) async fn download_request_to_file(
         .flush()
         .await
         .map_err(|error| AppError::from_io(&error))?;
+    if received != reported {
+        progress(phase, received as f64, total as f64);
+    }
     Ok(())
 }
 
-pub(super) async fn write_download_chunk(
-    output: &mut tokio::fs::File,
+pub(super) async fn write_download_chunk<W: tokio::io::AsyncWrite + Unpin>(
+    output: &mut W,
     chunk: &[u8],
 ) -> Result<(), AppError> {
     output

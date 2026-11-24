@@ -105,8 +105,15 @@ export default function ModelsPanel(props: ModelsPanelProps) {
           </FeedbackBanner>
         )}
 
-      <div className="models-list-toolbar">
+      <div className="models-list-header">
         <div className="models-list-heading"><h2>{t("panel.models")}</h2>{models && <span className="models-list-count">{visible.length}</span>}</div>
+        <div className="models-list-actions">
+          <label className="models-list-toggle" ><input type="checkbox" checked={showVision} onChange={(event) => setShowVision(event.target.checked)} /> {t("panel.visionModels")}</label>
+          {scanning ? <button type="button" onClick={cancelScan} className="app-button app-button--secondary"><StableLabel value={t("panel.cancelScan")} labels={[t("panel.retry"), t("panel.rescan")]} /></button> : <button type="button" data-icon="refresh" onClick={() => setScanRequest((current) => current + 1)} disabled={modelUpdates.busy || folderAction !== 'idle'} className="app-button app-button--secondary"><StableLabel value={scanError ? t("panel.retry") : t("panel.rescan")} labels={[t("panel.retry"), t("panel.rescan"), t("panel.cancelScan")]} /></button>}
+          <button type="button" data-icon="refresh" onClick={modelUpdates.refresh} disabled={!active || !updateCatalog || scanning || modelUpdates.checking || modelUpdates.busy || folderAction !== 'idle'} className="app-button app-button--secondary"><StableLabel value={modelUpdates.checking ? updatesCopy.checking : updatesCopy.check} labels={[updatesCopy.checking, updatesCopy.check]} /></button>
+        </div>
+      </div>
+      <div className="models-list-controls">
         <div className="app-search-field models-list-filter">
           <input
             ref={modelFilterInput}
@@ -148,9 +155,6 @@ export default function ModelsPanel(props: ModelsPanelProps) {
             { value: 'size-asc', label: sortCopy.sizeAsc },
           ]}
         />
-        <label className="models-list-toggle" ><input type="checkbox" checked={showVision} onChange={(event) => setShowVision(event.target.checked)} /> {t("panel.visionModels")}</label>
-        {scanning ? <button type="button" onClick={cancelScan} className="app-button app-button--secondary app-button--sm"><StableLabel value={t("panel.cancelScan")} labels={[t("panel.retry"), t("panel.rescan")]} /></button> : <button type="button" data-icon="refresh" onClick={() => setScanRequest((current) => current + 1)} disabled={modelUpdates.busy || folderAction !== 'idle'} className="app-button app-button--secondary app-button--sm"><StableLabel value={scanError ? t("panel.retry") : t("panel.rescan")} labels={[t("panel.retry"), t("panel.rescan"), t("panel.cancelScan")]} /></button>}
-        <button type="button" data-icon="refresh" onClick={modelUpdates.refresh} disabled={!active || !updateCatalog || scanning || modelUpdates.checking || modelUpdates.busy || folderAction !== 'idle'} className="app-button app-button--secondary app-button--sm"><StableLabel value={modelUpdates.checking ? updatesCopy.checking : updatesCopy.check} labels={[updatesCopy.checking, updatesCopy.check]} /></button>
       </div>
       <p className="mb-2 text-xs ui-color-muted">{updatesCopy.incremental}</p>
 

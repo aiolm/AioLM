@@ -122,7 +122,7 @@ export function PerformanceBenchView({ controller }: { controller: ReturnType<ty
             </fieldset>
             <fieldset className="performance-choice" aria-describedby="performance-concurrency-hint">
               <legend>{copy.batchSizes}</legend>
-              <div className="performance-chips">{CONCURRENCIES.map((value) => <label key={value} className="performance-chip"><input type="checkbox" checked={concurrencies.includes(value)} onChange={() => toggle(value, concurrencies, setConcurrencies)} /><span>{value}×</span></label>)}</div>
+              <div className="performance-chips performance-chips--quad">{CONCURRENCIES.map((value) => <label key={value} className="performance-chip"><input type="checkbox" checked={concurrencies.includes(value)} onChange={() => toggle(value, concurrencies, setConcurrencies)} /><span>{value}×</span></label>)}</div>
               <p id="performance-concurrency-hint" className="performance-hint">{copy.concurrencyHint}</p>
             </fieldset>
             <div className="performance-fixed-workload">

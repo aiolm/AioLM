@@ -2,7 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { hfCheckModelUpdates, hfUpdateModel, type ModelUpdateStatus } from '../../shared/api/models';
 import { hfCancelDownload } from '../../shared/api/commands';
 import { isIpcErrorKind } from '../../shared/api/ipcError';
-import { MODEL_DOWNLOAD_TASK_ID, useModelDownload } from '../../shared/state/modelDownloadTask';
+import {
+  createDownloadId,
+  isDownloadTaskActive,
+  modelDownloadTaskId,
+  useModelDownloads,
+} from '../../shared/state/modelDownloadTask';
 import { finishTask, getTaskSnapshot, registerTask, subscribeTasks } from '../../shared/state/taskRegistry';
 import { invalidateModelCatalog } from '../model-settings/useModelCatalog';
 
@@ -12,7 +17,8 @@ export interface ModelUpdateCatalog {
   directory: string;
 }
 
-const currentTask = () => getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID);
+const currentTask = (taskId: string) =>
+  getTaskSnapshot().find(task => task.id === taskId);
 
 export function useModelUpdates({ active, directory, catalog, blocked }: {
   active: boolean;
@@ -20,7 +26,7 @@ export function useModelUpdates({ active, directory, catalog, blocked }: {
   catalog: ModelUpdateCatalog | null;
   blocked: boolean;
 }) {
-  const task = useModelDownload();
+  const downloadTasks = useModelDownloads();
   const [request, setRequest] = useState(0);
   const [lookup, setLookup] = useState<{
     catalog: ModelUpdateCatalog;
@@ -36,7 +42,7 @@ export function useModelUpdates({ active, directory, catalog, blocked }: {
   const settledLookupRef = useRef<{ catalog: ModelUpdateCatalog; directory: string; request: number } | null>(null);
   const context = useRef({ active, directory, catalog, blocked });
   context.current = { active, directory, catalog, blocked };
-  const busy = updating !== null || task?.state === 'running' || task?.state === 'cancelling';
+  const busy = updating !== null || downloadTasks.some(isDownloadTaskActive);
   const eligible = active && !!catalog && catalog.directory === directory;
 
   useEffect(() => () => {
@@ -80,33 +86,34 @@ export function useModelUpdates({ active, directory, catalog, blocked }: {
     const current = context.current;
     const status = lookup?.catalog === current.catalog && lookup.request === request && !lookup.checking
       ? lookup.statuses[path] : undefined;
-    const task = currentTask();
     if (!current.active || !current.catalog || current.catalog.directory !== current.directory || current.blocked
-      || origin.current !== null || task?.state === 'running' || task?.state === 'cancelling' || status?.error || !status?.supported || !status.update_available || !status.latest_revision) return;
+      || origin.current !== null || status?.error || !status?.supported || !status.update_available || !status.latest_revision) return;
     const ownOrigin = { disposed: false };
     origin.current = ownOrigin;
     setUpdating(path);
     setFailure(null);
-    const cancel = () => hfCancelDownload();
+    const downloadId = createDownloadId();
+    const taskId = modelDownloadTaskId(downloadId);
+    const cancel = () => hfCancelDownload(downloadId);
     let superseded = false;
     // A replacement can appear and disappear before the next React render.
     const unsubscribe = subscribeTasks(() => {
-      const next = currentTask();
+      const next = currentTask(taskId);
       if (next && next.cancel !== cancel) superseded = true;
     });
-    const ownsTask = () => !superseded && currentTask()?.cancel === cancel;
-    registerTask({ id: MODEL_DOWNLOAD_TASK_ID, kind: 'model-download', label: path,
-      phase: 'starting', received: 0, total: status.download_bytes, interruptible: true, cancel });
+    const ownsTask = () => !superseded && currentTask(taskId)?.cancel === cancel;
+    registerTask({ id: taskId, kind: 'model-download', downloadKind: 'update', label: path,
+      filePath: path, modelsDir: current.directory, phase: 'starting', received: 0, total: status.download_bytes, interruptible: true, cancel });
     try {
-      await hfUpdateModel(path, current.directory, status.latest_revision);
+      await hfUpdateModel(path, current.directory, status.latest_revision, downloadId);
       // A committed update must refresh every catalog even if its panel left,
       // its folder changed, or its task row was dismissed/replaced meanwhile.
       invalidateModelCatalog();
-      if (ownsTask()) finishTask(MODEL_DOWNLOAD_TASK_ID, 'completed');
+      if (ownsTask()) finishTask(taskId, 'completed');
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const cancelled = isIpcErrorKind(error, 'cancelled');
-      if (ownsTask()) finishTask(MODEL_DOWNLOAD_TASK_ID, cancelled ? 'cancelled' : 'failed', message);
+      if (ownsTask()) finishTask(taskId, cancelled ? 'cancelled' : 'failed', message);
       if (!cancelled && !superseded && !ownOrigin.disposed && origin.current === ownOrigin
         && context.current.active && context.current.catalog === current.catalog && context.current.directory === current.directory) {
         setFailure({ catalog: current.catalog, message });

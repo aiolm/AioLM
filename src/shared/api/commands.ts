@@ -42,16 +42,45 @@ export const hfSetToken = (token: string) => invoke<HfTokenStatus>("hf_set_token
 export const hfClearToken = () => invoke<HfTokenStatus>("hf_clear_token");
 export const hfOpenModelCard = (repoId: string) => invoke<void>("hf_open_model_card", { repoId });
 /** A split GGUF downloads all parts from one revision and returns its first entrypoint. */
-export const hfDownloadModel = (repoId: string, filePath: string, modelsDir: string, includeCompanions?: boolean, revision?: string) =>
-  invoke<DownloadedModel>("hf_download_model", { repoId, filePath, modelsDir, ...(includeCompanions !== undefined ? { includeCompanions } : {}), ...(revision !== undefined ? { revision } : {}) });
-export const hfCancelDownload = () => invoke<void>("hf_cancel_download");
+export const hfDownloadModel = (
+  repoId: string,
+  filePath: string,
+  modelsDir: string,
+  includeCompanions?: boolean,
+  revision?: string,
+  downloadId?: string,
+) =>
+  invoke<DownloadedModel>("hf_download_model", {
+    repoId,
+    filePath,
+    modelsDir,
+    ...(includeCompanions !== undefined ? { includeCompanions } : {}),
+    ...(revision !== undefined ? { revision } : {}),
+    ...(downloadId !== undefined ? { downloadId } : {}),
+  });
+export const hfCancelDownload = (downloadId?: string) =>
+  downloadId !== undefined
+    ? invoke<void>("hf_cancel_download", { downloadId })
+    : invoke<void>("hf_cancel_download");
 /** Interrupted model downloads, most recent first. */
 export const hfPendingDownloads = () => invoke<PendingDownload[]>("hf_pending_downloads");
 /** Delete an interrupted download's staged data and forget it. */
 export const hfDiscardDownload = (id: string) => invoke<void>("hf_discard_download", { id });
 /** A selected weight includes its required model assets; omission downloads the whole snapshot. */
-export const hfDownloadSnapshot = (repoId: string, modelsDir: string, filePath?: string, revision?: string) =>
-  invoke<ModelArtifact>('hf_download_snapshot', { repoId, modelsDir, ...(filePath !== undefined ? { filePath } : {}), ...(revision !== undefined ? { revision } : {}) });
+export const hfDownloadSnapshot = (
+  repoId: string,
+  modelsDir: string,
+  filePath?: string,
+  revision?: string,
+  downloadId?: string,
+) =>
+  invoke<ModelArtifact>('hf_download_snapshot', {
+    repoId,
+    modelsDir,
+    ...(filePath !== undefined ? { filePath } : {}),
+    ...(revision !== undefined ? { revision } : {}),
+    ...(downloadId !== undefined ? { downloadId } : {}),
+  });
 export const pickAttachment = () => invoke<string | null>("pick_attachment");
 export interface AttachmentDropNotice {
   id: string | null;

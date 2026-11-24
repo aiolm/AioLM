@@ -183,11 +183,13 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
         <input id={`${id}-cwd`} name="execution-directory" className="app-input" value={workingDirectory}
           disabled={disabled || busy || accepting} autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
           aria-describedby={`${id}-cwd-hint`} onChange={event => {
+            if (disabled || busy || accepting) return;
             generation.current += 1;
             setWorkingDirectory(event.target.value); setFound(null); setRequest(null); setError('');
           }} />
         <button type="button" className="app-button app-button--secondary" disabled={disabled || busy || accepting}
           onClick={() => {
+            if (disabled || busy || accepting) return;
             const ownGeneration = ++generation.current;
             void pickRuntimePath('folder').then(path => {
               if (generation.current !== ownGeneration) return;
@@ -199,6 +201,7 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
       <p id={`${id}-cwd-hint`} className="app-section-hint">{copy.workingDirectoryHint}</p>
     </div>}
     {target && <HelpTextSettings value={textChoice} disabled={disabled || busy || accepting} onChange={next => {
+      if (disabled || busy || accepting) return;
       generation.current += 1;
       setTextChoice(next); setFound(null); setRequest(null); setError('');
     }} />}

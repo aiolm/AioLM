@@ -1,19 +1,27 @@
 /* Shared list/detail pages and the parameter editor. */
 .discover-toolbar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; min-width: 0; margin-bottom: 12px; }
-.discover-toolbar-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; max-width: 100%; font-size: var(--ui-text-support); }
+.discover-destination { display: grid; gap: 2px; padding: 8px 12px; text-align: start; font-size: var(--ui-text-support); color: var(--ui-faint); }
+.discover-toolbar-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; max-width: 100%; color: var(--ui-muted); font-size: var(--ui-text-support); font-weight: 500; }
 .discover-toolbar-field > .app-custom-select-container { min-width: min(100%, 10.5rem); }
 .discover-toolbar-search { flex: 1 1 192px; }
 .discover-download-complete { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; padding: 12px 16px; border: 1px solid var(--tone-success-border); border-radius: var(--ui-radius-panel); background: var(--tone-success-bg); }
 .discover-download-complete p { margin: 0; font-size: var(--ui-text); color: var(--ui-ink); }
 .discover-repository { overflow-wrap: anywhere; }
+.discover-results .app-list-row, .discover-detail .app-list-row { padding: 10px 12px; }
+.discover-file-row { display: grid; gap: 8px; min-width: 0; }
+.discover-file-row__main { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; min-width: 0; }
+.discover-token-disclosure { padding: 12px 16px; }
 .discover-token-disclosure > summary.discover-token-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .discover-token-disclosure > summary.discover-token-summary::after { margin-inline-start: auto; }
-.discover-file-filter { border-bottom: 1px solid var(--ui-border); padding-bottom: 8px; }
+.discover-file-filter { border-bottom: 1px solid var(--ui-border); padding-bottom: 12px; }
 /* Download actions move to a new line before a narrow card can clip Cancel. */
 .discover-progress-summary, .discover-progress-actions { min-width: 0; flex-wrap: wrap; }
 .discover-progress-bytes, .discover-progress-actions { max-width: 100%; }
 .discover-progress-bytes { min-width: 0; overflow-wrap: anywhere; }
 .discover-progress-rate { min-width: min(120px, 100%); max-width: 100%; overflow-wrap: anywhere; }
+.discover-row-transfer { display: grid; gap: 6px; margin-top: 2px; min-width: 0; }
+.discover-row-transfer__meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: var(--ui-text-caption); color: var(--ui-muted); font-variant-numeric: tabular-nums; }
+.discover-row-transfer__actions { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-inline-start: auto; }
 /* Engines: inventory, add journey and engine detail are single columns. The
    detail reads engine context, a compact device strip, backend or environment
    rows, then quiet advanced tools. */
@@ -26,7 +34,7 @@
 .adapter-add .app-section-hint { margin: 0; }
 .adapter-journey { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 0; padding: 0; list-style: none; }
 .adapter-journey > li { display: inline-flex; align-items: center; gap: 8px; color: var(--ui-ink); font-size: var(--ui-text); line-height: var(--ui-text-leading); }
-.adapter-journey__index { display: inline-grid; place-items: center; flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--ui-accent-soft); color: var(--ui-accent); font-size: var(--ui-text-support); font-weight: 600; font-variant-numeric: tabular-nums; }
+.adapter-journey__index { display: inline-grid; place-items: center; flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--ui-accent-soft); color: var(--ui-accent); font-size: var(--ui-text-support); font-weight: 600; font-variant-numeric: tabular-nums; text-box: trim-both cap alphabetic; }
 .adapter-inventory { display: grid; gap: 12px; min-width: 0; }
 .adapter-inventory__header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
 .adapter-inventory__header .adapter-count { margin: 0; }
@@ -39,27 +47,27 @@
    WKWebView render-skipping can drop their text and pointer target mid-click. */
 .adapter-row { padding: 8px 0; border-bottom: 1px solid var(--ui-border); }
 .adapter-row__head { display: grid; grid-template-columns: minmax(0,1fr) auto auto; align-items: center; gap: 6px 16px; }
-.adapter-row__open { display: grid; gap: 2px; min-width: 0; min-height: var(--ui-control); padding: 6px 8px; border: 0; border-radius: var(--ui-radius-control); background: transparent; color: var(--ui-ink); font: inherit; text-align: start; cursor: pointer; overflow-wrap: anywhere; }
+.adapter-row__open { display: grid; gap: 2px; min-width: 0; min-height: var(--ui-control); margin-inline-start: -8px; padding: 6px 8px; border: 0; border-radius: var(--ui-radius-control); background: transparent; color: var(--ui-ink); font: inherit; text-align: start; cursor: pointer; overflow-wrap: anywhere; }
 .adapter-row__open strong { font-weight: 600; }
 .adapter-row__open:hover:not(:disabled) { background: var(--ui-row-hover); }
 .adapter-row__open:disabled { cursor: not-allowed; color: var(--ui-faint); opacity: 0.48; }
 .adapter-row__meta { color: var(--ui-muted); font-size: var(--ui-text-support); }
 .adapter-row__badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
-.adapter-row__details { margin: 4px 8px; padding: 8px 12px; border-radius: var(--ui-radius-control); background: var(--ui-surface-muted); color: var(--ui-muted); font-size: var(--ui-text-support); line-height: var(--ui-text-support-leading); overflow-wrap: anywhere; }
+.adapter-row__details { margin: 6px 0 2px; padding: 8px 12px; border-radius: var(--ui-radius-control); background: var(--ui-surface-muted); color: var(--ui-muted); font-size: var(--ui-text-support); line-height: var(--ui-text-support-leading); overflow-wrap: anywhere; }
 .adapter-row__details ul { margin: 4px 0 0; padding-inline-start: 18px; list-style: disc; }
 
 /* Opened engine or add journey: back control above the context heading. */
 .adapter-context { display: grid; justify-items: start; gap: 8px; min-width: 0; }
 .adapter-context__identity { display: grid; gap: 2px; min-width: 0; }
 .adapter-context__identity .app-section-hint { margin: 0; }
-.adapter-back { margin-inline-start: -8px; }
+.adapter-back { margin-inline-start: calc(var(--ui-control-pad-inline) * -1); }
 .adapter-back svg { flex-shrink: 0; }
 .adapter-next { flex-wrap: wrap; margin-block-start: 8px; }
 
 /* Compact device strip: label/value pairs flow on one line and wrap. */
-.runtime-device-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; min-width: 0; padding: 10px 14px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); background: var(--ui-surface-muted); }
+.runtime-device-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; min-width: 0; padding: 12px 16px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); background: var(--ui-surface-muted); }
 .runtime-device-summary__title { flex: none; color: var(--ui-muted); font-size: var(--ui-text-support); font-weight: 600; line-height: var(--ui-text-leading); }
-.runtime-device-properties { display: flex; flex: 1 1 20rem; flex-wrap: wrap; gap: 4px 24px; min-width: 0; margin: 0; }
+.runtime-device-properties { display: flex; flex: 1 1 14rem; flex-wrap: wrap; gap: 4px 24px; min-width: 0; margin: 0; }
 .runtime-device-properties > div { display: flex; align-items: baseline; gap: 8px; min-width: 0; max-width: 100%; }
 .runtime-device-properties dt { flex: none; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: var(--ui-text-leading); }
 .runtime-device-properties dd { min-width: 0; margin: 0; color: var(--ui-ink); font-size: var(--ui-text); line-height: var(--ui-text-leading); overflow-wrap: anywhere; }
@@ -112,7 +120,7 @@
 .runtime-version__name { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
 .runtime-version__label { min-width: 0; color: var(--ui-ink); font-family: var(--font-mono); font-size: var(--ui-text-support); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .runtime-version__tag { padding: 0 5px; border: 1px solid transparent; border-radius: var(--ui-radius-sm); background: var(--tone-warning-bg); color: var(--tone-warning-ink); font-size: var(--ui-text-caption); font-weight: 600; line-height: 16px; white-space: nowrap; }
-.runtime-version__size { color: var(--ui-muted); font-size: var(--ui-text-support); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.runtime-version__size { color: var(--ui-muted); font-size: var(--ui-text-support); font-variant-numeric: tabular-nums; text-align: end; white-space: nowrap; }
 
 /* Advanced tools and the add journey's manual options are quiet disclosures
    under a hairline, with hairline subsections and no nested cards. */
@@ -127,7 +135,7 @@
 .runtime-tool__header { display: grid; gap: 2px; min-width: 0; }
 .runtime-tool__header .app-section-hint { margin: 0; }
 .runtime-tool__header--split { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px 16px; }
-.runtime-tool__header--split > div { display: grid; flex: 1 1 20rem; gap: 2px; min-width: 0; }
+.runtime-tool__header--split > div { display: grid; flex: 1 1 14rem; gap: 2px; min-width: 0; }
 .runtime-tool__title { color: var(--ui-ink); font-size: var(--ui-text-group); font-weight: 600; line-height: 1.4; }
 .runtime-tool__caution { color: var(--tone-warning-ink); font-size: var(--ui-text-support); line-height: var(--ui-text-support-leading); overflow-wrap: break-word; }
 .runtime-tool__form { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); align-items: end; gap: 12px 16px; min-width: 0; }
@@ -138,10 +146,10 @@
 
 /* Python / external environments of a non-llama engine. */
 .provider-env { display: grid; gap: 16px; min-width: 0; }
-.provider-env__field { display: grid; gap: 6px; max-width: 40rem; min-width: 0; color: var(--ui-ink); font-size: var(--ui-text); font-weight: 500; }
+.provider-env__field { display: grid; gap: 6px; min-width: 0; color: var(--ui-ink); font-size: var(--ui-text); font-weight: 500; }
 .provider-env__provider { display: grid; gap: 12px; min-width: 0; padding-top: 16px; border-top: 1px solid var(--ui-border); }
 .provider-env__provider-header { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px 16px; }
-.provider-env__identity { display: grid; flex: 1 1 18rem; gap: 2px; min-width: 0; }
+.provider-env__identity { display: grid; flex: 1 1 14rem; gap: 2px; min-width: 0; }
 .provider-env__identity .app-section-hint { margin: 0; }
 .provider-env__name { color: var(--ui-ink); font-size: var(--ui-text-group); font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
 .provider-env__unsupported { color: var(--tone-warning-ink); font-size: var(--ui-text-support); }
@@ -162,7 +170,7 @@
 .runtime-auto__header .app-section-hint { margin: 0; }
 .runtime-auto-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
 .runtime-auto-steps > li { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: var(--ui-control); padding: 6px 10px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); color: var(--ui-muted); font-size: var(--ui-text-support); line-height: var(--ui-text-support-leading); }
-.runtime-auto-steps__index { display: inline-grid; place-items: center; flex: none; width: 20px; height: 20px; border: 1px solid var(--ui-border-strong); border-radius: 50%; font-size: var(--ui-text-caption); font-weight: 600; font-variant-numeric: tabular-nums; }
+.runtime-auto-steps__index { display: inline-grid; place-items: center; flex: none; width: 20px; height: 20px; border: 1px solid var(--ui-border-strong); border-radius: 50%; font-size: var(--ui-text-caption); font-weight: 600; font-variant-numeric: tabular-nums; text-box: trim-both cap alphabetic; }
 .runtime-auto-steps__label { min-width: 0; overflow-wrap: anywhere; }
 .runtime-auto-steps > li[data-state="done"] { color: var(--ui-ink); }
 .runtime-auto-steps > li[data-state="done"] .runtime-auto-steps__index { border-color: transparent; background: var(--tone-success-bg); color: var(--tone-success-ink); }
@@ -185,7 +193,7 @@
 .runtime-auto-candidate__name { color: var(--ui-ink); font-weight: 500; overflow-wrap: anywhere; }
 .runtime-auto-candidate small { color: var(--ui-muted); font-size: var(--ui-text-support); }
 .runtime-auto-candidate__path { font-family: var(--font-mono); overflow-wrap: anywhere; }
-.runtime-auto-field { display: grid; gap: 6px; max-width: 32rem; min-width: 0; }
+.runtime-auto-field { display: grid; gap: 6px; min-width: 0; }
 
 /* Manual registration (entry point wizard, setup recipe, manifest file). */
 .runtime-manifest { display: grid; gap: 12px; min-width: 0; }
@@ -218,14 +226,27 @@
 .adapter-setup__recipe fieldset { display: grid; gap: 12px; min-width: 0; margin: 0; padding: 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); }
 
 @container workspace (min-width: 640px) {
- .runtime-group__header { grid-template-columns: minmax(0,1fr) minmax(0,1fr) max-content; }
+ .adapter-list { grid-template-columns: minmax(0,1fr) auto auto; column-gap: 16px; }
+ .adapter-row { display: grid; grid-column: 1 / -1; grid-template-columns: minmax(0,1fr) auto auto; grid-template-columns: subgrid; }
+ .adapter-row__head { grid-column: 1 / -1; grid-template-columns: minmax(0,1fr) auto auto; grid-template-columns: subgrid; }
+ .adapter-row__head > .app-button--ghost { margin-inline-end: -12px; }
+ .adapter-row__details { grid-column: 1 / -1; }
+ .runtime-groups { display: grid; grid-template-columns: minmax(0,1.2fr) minmax(0,1fr) minmax(11.5rem,max-content); column-gap: 20px; }
+ .runtime-group { display: grid; grid-column: 1 / -1; grid-template-columns: minmax(0,1.2fr) minmax(0,1fr) minmax(11.5rem,max-content); grid-template-columns: subgrid; }
+ .runtime-group__header { grid-column: 1 / -1; grid-template-columns: minmax(0,1.2fr) minmax(0,1fr) minmax(11.5rem,max-content); grid-template-columns: subgrid; }
+ .runtime-progress-slot, .runtime-versions { grid-column: 1 / -1; }
+ .runtime-versions { display: grid; grid-template-columns: minmax(0,1fr) max-content max-content; column-gap: 16px; }
+ .runtime-version { grid-column: 1 / -1; grid-template-columns: minmax(0,1fr) max-content max-content; grid-template-columns: subgrid; }
  .runtime-group__latest { text-align: end; }
  .runtime-group__action { justify-content: flex-end; min-width: 11.5rem; }
+}
+@container workspace (min-width: 720px) {
+ .runtime-tool__form { grid-template-columns: minmax(min(100%, 14rem), 1fr) minmax(min(100%, 16rem), 1.4fr) auto; }
 }
 @container workspace (max-width: 639px) {
  .adapter-add { padding: 16px; }
  .adapter-row__head { grid-template-columns: minmax(0,1fr) auto; }
- .adapter-row__badges { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; padding-inline: 8px; }
+ .adapter-row__badges { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; padding-inline: 0; }
  .runtime-group { padding: 12px 0; }
  .runtime-version { grid-template-columns: minmax(0,1fr) auto; }
  .runtime-version__actions { grid-column: 1 / -1; justify-content: flex-end; }
@@ -271,13 +292,14 @@ a.tuning-default-note:hover { text-decoration-thickness: 2px; }
 .chat-thread-backdrop { position: absolute; inset: 0; z-index: 34; background: var(--ui-overlay); }
 .chat-conversation { display: flex; position: relative; min-width: 0; min-height: 0; flex: 1; flex-direction: column; padding-block: 16px 24px; container: conversation / inline-size; }
 .chat-log-container { position: relative; display: flex; flex-direction: column; flex: 1 1 0; min-height: 100px; min-width: 0; }
-.chat-message-log { min-height: 0; flex: 1 1 0; overflow: auto; padding-block: 12px; }
+.chat-message-log { display: flex; flex-direction: column; min-height: 0; flex: 1 1 0; overflow: auto; padding-block: 12px; }
 .chat-scroll-bottom { position: absolute; inset-inline-start: 50%; transform: translateX(-50%); bottom: 12px; z-index: 15; border-radius: var(--ui-radius-pill); box-shadow: var(--ui-elev-menu); }
 .chat-message-content, .chat-composer, .chat-conversation-heading, .chat-session-status, .chat-owner-banner { width: 100%; max-width: 90rem; margin-inline: auto; }
 .chat-session-status { padding-bottom: 8px; }
 .chat-owner-banner { margin-bottom: 12px; }
-.chat-empty-conversation { margin-block: clamp(12px, 5dvh, 48px); }
-.chat-message-content { padding-inline: 4px; }
+.chat-empty-conversation, .chat-blocked-state { margin-block: auto; }
+.chat-message-content { padding-inline: 0; }
+.chat-message-content:has(> .chat-blocked-state, > .chat-empty-conversation) { flex: 1 0 auto; display: flex; flex-direction: column; justify-content: center; }
 .chat-message-content > * + * { margin-top: 12px; }
 /* Completed history stays searchable and focusable without laying out every row. */
 .chat-message-completed { content-visibility: auto; contain-intrinsic-size: auto none auto 12rem; }
@@ -287,7 +309,6 @@ a.tuning-default-note:hover { text-decoration-thickness: 2px; }
 .chat-message-compact { padding-block: 8px; }
 /* A short window keeps the failure and its details above the composer
    instead of spending the log's height on margins. */
-.chat-blocked-state { margin-block: clamp(12px, 5dvh, 48px); }
 .chat-blocked-state .app-empty-state { padding-block: clamp(8px, 3dvh, 24px); }
 /* Failed launch diagnostics belong beside the retained or empty conversation. */
 .chat-failure-details { margin-top: 12px; text-align: start; color: var(--ui-ink); }
@@ -304,8 +325,9 @@ a.tuning-default-note:hover { text-decoration-thickness: 2px; }
 .chat-mcp-tools { position: static; flex-shrink: 0; }
 .chat-tool-strip > .chat-mcp-tools { position: static; min-width: 0; max-width: 100%; margin: 0; }
 .chat-tool-strip > .chat-mcp-tools > summary { display: inline-flex; align-items: center; gap: 6px; overflow-wrap: anywhere; }
-.chat-tool-strip > .chat-mcp-tools > summary::after { flex-shrink: 0; float: none; order: 2; margin-inline-start: 2px; }
-.chat-tool-strip > .chat-mcp-tools > summary.chat-mcp-summary[data-count]::before { content: attr(data-count); order: 1; display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding-inline: 5px; border-radius: var(--ui-radius-pill); background: var(--ui-accent-soft); color: var(--ui-accent); font-size: var(--ui-text-caption); font-weight: 600; font-variant-numeric: tabular-nums; }
+.chat-tool-strip > .chat-mcp-tools > summary::after { flex-shrink: 0; float: none; order: 2; margin-inline-start: 2px; transform: rotate(180deg); }
+.chat-tool-strip > .chat-mcp-tools[open] > summary::after { transform: rotate(0deg); }
+.chat-tool-strip > .chat-mcp-tools > summary.chat-mcp-summary[data-count]::before { content: attr(data-count); order: 1; display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding-inline: 5px; border-radius: var(--ui-radius-pill); background: var(--ui-accent-soft); color: var(--ui-accent); font-size: var(--ui-text-caption); font-weight: 600; text-box: trim-both cap alphabetic; font-variant-numeric: tabular-nums; }
 .chat-tool-strip > .chat-mcp-tools > summary[aria-disabled="true"] { opacity: 0.48; cursor: not-allowed; }
 .chat-mcp-tool-item { display: grid; gap: 2px; }
 .chat-mcp-tool-desc { padding-inline-start: 20px; line-height: 1.4; }
@@ -328,7 +350,8 @@ a.tuning-default-note:hover { text-decoration-thickness: 2px; }
 .chat-media-video { flex-wrap: wrap; }
 .chat-thread-sidebar { display: none; position: absolute; inset-block: 0; inset-inline-start: 0; z-index: 35; width: min(288px,100%); flex-shrink: 0; flex-direction: column; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); background: var(--ui-panel); padding: 12px; box-shadow: var(--ui-elev-menu); }
 .chat-thread-sidebar.is-open { display: flex; }
-.chat-thread-heading { font-size: var(--ui-text-group); font-weight: 600; }
+.chat-thread-header { display: flex; align-items: center; gap: 8px; min-height: var(--ui-control); margin-bottom: 12px; }
+.chat-thread-heading { display: flex; align-items: center; gap: 6px; font-size: var(--ui-text-group); font-weight: 600; }
 .chat-conversation-title, .chat-session-target { min-width: 0; }
 .chat-conversation-title { flex: 1 1 auto; }
 .chat-page-title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--ui-text-title); line-height: var(--ui-control); }
@@ -349,7 +372,7 @@ a.tuning-default-note:hover { text-decoration-thickness: 2px; }
 .chat-tool-arguments { max-height: min(112px,20dvh); overflow: auto; margin-top: 8px; padding: 8px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); background: var(--ui-mono-bg); color: var(--ui-mono-ink); white-space: pre-wrap; overflow-wrap: anywhere; }
 .chat-tool-approval-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .chat-composer-actions button { min-width: 0; max-width: 100%; }
-.chat-thread-entry { display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 2px; width: 100%; min-width: 0; min-height: var(--ui-control); overflow: hidden; text-align: start; }
+.chat-thread-entry { display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 2px; width: 100%; min-width: 0; min-height: var(--ui-control); padding-inline: 6px; overflow: hidden; text-align: start; }
 .chat-thread-title { display: block; width: 100%; max-width: 100%; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .chat-thread-meta { display: flex; flex-wrap: wrap; align-items: center; max-width: 100%; min-width: 0; gap: 6px; }
 .chat-thread-live { display: inline-flex; align-items: center; gap: 4px; color: var(--ui-accent); font-weight: 500; }
@@ -377,19 +400,38 @@ a.tuning-default-note:hover { text-decoration-thickness: 2px; }
 .chat-response-metrics-row > dd { display: flex; flex-wrap: wrap; gap: 0 6px; min-width: 0; max-width: 100%; }
 .chat-response-metrics-row > dd > span { min-width: 0; max-width: 100%; }
 .chat-response-metrics-details dt, .chat-response-metrics-details dd { overflow-wrap: anywhere; min-width: 0; max-width: 100%; }
-.chat-thread-row { padding: 4px; overflow: hidden; }
-.chat-thread-list { --chat-scrollbar-size: 8px; scrollbar-width: thin; scrollbar-color: var(--ui-border-strong) transparent; scrollbar-gutter: stable; overflow-x: hidden; }
-.chat-thread-list::-webkit-scrollbar { width: var(--chat-scrollbar-size); }
-.chat-thread-list::-webkit-scrollbar-thumb { background: var(--ui-border-strong); border-radius: 4px; }
+.chat-thread-row { padding: 4px 6px; overflow: hidden; }
+.chat-thread-list { --chat-scrollbar-size: 8px; scrollbar-width: thin; scrollbar-color: var(--ui-border-strong) transparent; overflow-x: hidden; }
+@supports not (scrollbar-color: auto) {
+ .chat-thread-list { scrollbar-width: auto; }
+ .chat-thread-list::-webkit-scrollbar { width: var(--chat-scrollbar-size); }
+ .chat-thread-list::-webkit-scrollbar-thumb { background: var(--ui-border-strong); border-radius: 4px; }
+}
 
 .projects-page { display: flex; flex-direction: column; min-height: 100%; }
 .projects-workspace { width: 100%; gap: 24px; }
 .projects-list { display: flex; min-width: 0; max-height: clamp(10rem, 35dvh, 24rem); flex-direction: column; padding-bottom: 16px; border-bottom: 1px solid var(--ui-border); }
+.projects-list-header, .projects-editor-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 32px; margin-bottom: 12px; }
+.projects-editor-header { justify-content: space-between; }
 .projects-list-items { min-height: 0; flex: 1; overflow-y: auto; }
+.projects-list-row { padding: 4px 6px; }
+.projects-list-row > .app-list-row__action { padding: 6px; }
+.projects-model-line { display: flex; align-items: flex-start; gap: 6px; width: 100%; min-width: 0; margin-top: 2px; color: var(--ui-faint); font-size: var(--ui-text-support); overflow-wrap: anywhere; }
+.projects-model-line > .model-family-icon { margin-top: 1px; }
 .projects-editor { min-width: 0; }
+.projects-field { display: grid; gap: 6px; min-width: 0; color: var(--ui-muted); font-size: var(--ui-text-support); font-weight: 500; }
 .projects-profile-summary { margin-top: 12px; padding: 16px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); background: var(--ui-surface); }
+.projects-profile-facts { display: grid; grid-template-columns: minmax(5rem, max-content) minmax(0, 1fr); gap: 8px 16px; align-items: baseline; margin: 12px 0 0; font-size: var(--ui-text-support); }
+.projects-profile-facts > div { display: contents; }
+.projects-profile-facts dt { color: var(--ui-muted); }
+.projects-profile-facts dd { min-width: 0; margin: 0; color: var(--ui-ink); }
+.projects-profile-model-cell { display: grid; gap: 4px; min-width: 0; }
+.projects-profile-model { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.projects-profile-model > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.projects-workspace-columns { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; margin-top: 12px; min-width: 0; }
+.projects-workspace-column { display: grid; align-content: start; gap: 8px; min-width: 0; }
 .projects-selection-list { max-height: clamp(12rem, 30dvh, 24rem); min-height: 0; flex: 1; overflow-y: auto; padding-block: 8px; border-block: 1px solid var(--ui-border); }
-.projects-editor-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.projects-editor-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .projects-editor-actions > .app-button--danger { margin-inline-start: auto; }
 
 /* Chat prose follows the line-spacing preference. The fallbacks are the values

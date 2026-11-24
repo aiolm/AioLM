@@ -34,8 +34,9 @@ export default function ChatSkillPicker({ native, catalog, warnings, loadError, 
       if (event.currentTarget.open && !loaded && !loading && native) onRefresh();
       if (!event.currentTarget.open) setQuery("");
     }}>
-      <summary className="app-button app-button--secondary app-button--sm cursor-pointer" aria-disabled={locked}
-        onClick={event => { if (locked) event.preventDefault(); }}>{pt("skills")}{selectedSkillIds.length > 0 ? ` · ${selectedSkillIds.length}` : ""}</summary>
+      <summary className="chat-mcp-summary app-button app-button--secondary app-button--sm cursor-pointer" aria-disabled={locked}
+        data-count={selectedSkillIds.length > 0 ? String(selectedSkillIds.length) : undefined}
+        onClick={event => { if (locked) event.preventDefault(); }}>{pt("skills")}</summary>
       <div className="chat-mcp-expanded border-t p-3 ui-border-color-border">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex min-w-0 flex-wrap items-center gap-2">

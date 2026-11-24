@@ -7,8 +7,11 @@ mod updates;
 use crate::error::{AppError, ErrorKind};
 use futures_util::StreamExt;
 pub use pending::{
-    discard as discard_pending_download, list as pending_downloads, PendingDownload,
+    discard as discard_pending_download, find as find_pending_download, list as pending_downloads,
+    PendingDownload,
 };
+#[cfg(test)]
+pub use pending::PendingFile;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 pub use snapshots::{download_snapshot, installed_snapshots};
@@ -218,7 +221,8 @@ fn http_error(status: reqwest::StatusCode, message: String) -> AppError {
 fn client() -> Result<reqwest::Client, AppError> {
     reqwest::Client::builder()
         .user_agent("aiolm/0.1")
-        .timeout(Duration::from_secs(45))
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(30))
         .redirect(crate::http_policy::https_redirect_policy(trusted_hf_host))
         .build()
         .map_err(|error| {
@@ -1013,7 +1017,7 @@ fn listed_gguf_files(
 
 /// GGUF's standard multi-part suffix is `-00001-of-00033.gguf`. Generates the
 /// group in order, without allocating names just to recognize a split model.
-fn shard_group(name: &str) -> Option<impl Iterator<Item = String> + '_> {
+pub(crate) fn shard_group(name: &str) -> Option<impl Iterator<Item = String> + '_> {
     let (stem, extension) = name.rsplit_once('.')?;
     if !extension.eq_ignore_ascii_case("gguf") {
         return None;
@@ -1222,6 +1226,7 @@ fn verified_before(receipts: Option<&Path>, target: &Path, oid: &str) -> bool {
 
 fn emit_progress(
     app: &AppHandle,
+    download_id: &str,
     repo_id: &str,
     file_path: &str,
     phase: &str,
@@ -1231,6 +1236,7 @@ fn emit_progress(
     let _ = app.emit(
         "model-download-progress",
         serde_json::json!({
+            "download_id": download_id,
             "repo_id": repo_id,
             "file_path": file_path,
             "phase": phase,
@@ -1356,6 +1362,7 @@ fn model_download_plan(files: &[HfFile], file_path: &str) -> Result<Vec<HfFile>,
 
 pub async fn download(
     app: AppHandle,
+    download_id: &str,
     repo_id: &str,
     file_path: &str,
     models_dir: &str,
@@ -1445,6 +1452,7 @@ pub async fn download(
         let target = target_path(models_dir, repo_id, file_path)?;
         snapshots::download_gguf_companions(
             &app,
+            download_id,
             repo_id,
             &revision,
             target
@@ -1461,6 +1469,7 @@ pub async fn download(
         let part = download_file(repo_id, file, models_dir, &cancel, |phase, received, _| {
             emit_progress(
                 &app,
+                download_id,
                 repo_id,
                 &label,
                 phase,
@@ -1501,15 +1510,16 @@ pub async fn download(
         )
         .await?;
     }
+    pending::forget(&pending_id);
     emit_progress(
         &app,
+        download_id,
         repo_id,
         &label,
         "complete",
         downloaded.size_bytes,
         downloaded.size_bytes,
     );
-    pending::forget(&pending_id);
     Ok(downloaded)
 }
 

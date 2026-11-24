@@ -13,9 +13,8 @@ import { formatMebibytes } from '../../shared/lib/units';
 import { loadedModelPath } from '../../shared/runtime/loadedModel';
 import { startModelScan } from '../../shared/runtime/modelScan';
 import { runSetupGaps } from '../../shared/runtime/runReadiness';
-import { MODEL_DOWNLOAD_TASK_ID } from '../../shared/state/modelDownloadTask';
+import { hasActiveModelDownload } from '../../shared/state/modelDownloadTask';
 import type { AppStore } from "../../shared/state/store";
-import { getTaskSnapshot } from '../../shared/state/taskRegistry';
 import { projectorChangeAllowed } from "../chat/visionState";
 import { useModelSettings } from '../model-settings/ModelSettingsProvider';
 import { invalidateModelCatalog, MODEL_CATALOG_CHANGED } from '../model-settings/useModelCatalog';
@@ -135,7 +134,8 @@ export function useModelsController({ store, onSelectModel, onModels, active = t
       cancelScan();
     }
     return () => {
-      if (pendingScan.current !== null || scanTimer.current !== null) {
+      const hadPending = pendingScan.current !== null || scanTimer.current !== null;
+      if (hadPending) {
         performedScanRef.current = null;
       }
       if (scanTimer.current !== null) {
@@ -145,6 +145,7 @@ export function useModelsController({ store, onSelectModel, onModels, active = t
       scanGeneration.current = nextScanGeneration(scanGeneration.current);
       pendingScan.current?.cancel();
       pendingScan.current = null;
+      if (hadPending) setScanning(false);
     };
   }, [active, cancelScan]);
 
@@ -298,7 +299,7 @@ export function useModelsController({ store, onSelectModel, onModels, active = t
   };
 
   const performSelectAndStart = async (model: api.GgufModel) => {
-    if (getTaskSnapshot().some(task => task.id === MODEL_DOWNLOAD_TASK_ID && (task.state === 'running' || task.state === 'cancelling'))) return;
+    if (hasActiveModelDownload()) return;
     const switching = serverRunning && liveModel !== model.path;
     try {
       const next = await store.updateConfig({ active_model: model.path });
@@ -342,7 +343,7 @@ export function useModelsController({ store, onSelectModel, onModels, active = t
     }
     const remove = async () => {
       setPendingConfirm(null);
-      if (getTaskSnapshot().some(task => task.id === MODEL_DOWNLOAD_TASK_ID && (task.state === 'running' || task.state === 'cancelling'))) return;
+      if (hasActiveModelDownload()) return;
       if (pendingDeletions.current.has(model.path)) return;
       pendingDeletions.current.add(model.path);
       try {

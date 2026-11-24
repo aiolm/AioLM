@@ -1,7 +1,12 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from "vitest";
-import { createUpdateStore } from "./updateStore";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { APP_UPDATE_TASK_ID, createUpdateStore } from "./updateStore";
+import { getDownloadCenterSnapshot, getModelDownloadSnapshot, getTaskSnapshot, removeTask } from "../../shared/state/taskRegistry";
 import type { AppUpdateInfo, AppUpdateProgress } from "../../shared/api/appUpdates";
+
+afterEach(() => {
+  for (const task of getTaskSnapshot()) removeTask(task.id);
+});
 
 const release: AppUpdateInfo = {
   current_version: "1.0.0", latest_version: "1.1.0", available: true, can_install: true,
@@ -109,5 +114,58 @@ describe("application update lifecycle", () => {
     await store.check(); await store.install();
     expect(client.install).not.toHaveBeenCalled();
     expect(client.listen).not.toHaveBeenCalled();
+  });
+
+  it("publishes installer download progress into DownloadsCenter with speed and settles on completion or failure", async () => {
+    const { store, client, emit } = fixture();
+    await store.check();
+    let rejectInstall!: (reason?: unknown) => void;
+    let resolveInstall!: () => void;
+    let now = 1000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    client.install
+      .mockImplementationOnce(() => new Promise<undefined>((_, reject) => { rejectInstall = reject; }))
+      .mockImplementationOnce(() => new Promise<undefined>((resolve) => { resolveInstall = () => resolve(undefined); }));
+
+    try {
+      const failedInstall = store.install();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(getModelDownloadSnapshot()).toHaveLength(0);
+      expect(getDownloadCenterSnapshot().map(task => task.id)).toContain(APP_UPDATE_TASK_ID);
+
+      now = 1000;
+      emit({ phase: "downloading", downloaded: 0, total: 10_000_000 });
+      now = 2000;
+      emit({ phase: "downloading", downloaded: 2_500_000, total: 10_000_000 });
+      expect(getDownloadCenterSnapshot().find(task => task.id === APP_UPDATE_TASK_ID)).toMatchObject({
+        label: "AioLM 1.1.0",
+        downloadKind: "app-update",
+        phase: "downloading",
+        received: 2_500_000,
+        total: 10_000_000,
+        speedBps: 2_500_000,
+      });
+
+      rejectInstall(new Error("Download interrupted"));
+      await failedInstall;
+      expect(getTaskSnapshot().find(task => task.id === APP_UPDATE_TASK_ID)).toMatchObject({
+        state: "failed",
+        detail: "Download interrupted",
+      });
+
+      // Retry after error verifies speed state resets cleanly and settles as completed.
+      const retryInstall = store.install();
+      await Promise.resolve();
+      await Promise.resolve();
+      emit({ phase: "verifying", downloaded: 10_000_000, total: 10_000_000 });
+      expect(getDownloadCenterSnapshot().find(task => task.id === APP_UPDATE_TASK_ID)?.speedBps).toBeUndefined();
+
+      resolveInstall();
+      await retryInstall;
+      expect(getTaskSnapshot().find(task => task.id === APP_UPDATE_TASK_ID)?.state).toBe("completed");
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });

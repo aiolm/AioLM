@@ -15,6 +15,9 @@ import { effectiveSchema } from "../../testing/effectiveSchema";
 import { testConfig } from "../../testing/appStore";
 import { defined } from "../../testing/assertDefined";
 import { getTaskSnapshot, registerTask, removeTask } from "../../shared/state/taskRegistry";
+import ActivityCenter from "../../shared/ui/ActivityCenter";
+import DownloadsCenter from "../../shared/ui/DownloadsCenter";
+import { PanelFeedbackOutlet, PanelFeedbackProvider } from "../../shared/ui/PanelFeedback";
 import { IpcError } from "../../shared/api/ipcError";
 
 afterEach(() => { act(() => { for (const task of getTaskSnapshot()) removeTask(task.id); }); });
@@ -38,6 +41,11 @@ vi.mock("../../shared/api/index", () => ({
   onRuntimeProgress: vi.fn(),
   providerInstall: vi.fn(),
   providerPortableImport: vi.fn(),
+  hfPendingDownloads: vi.fn(async () => []),
+  hfDiscardDownload: vi.fn(async () => undefined),
+  hfDownloadModel: vi.fn(),
+  hfDownloadSnapshot: vi.fn(),
+  hfCancelDownload: vi.fn(async () => undefined),
   pickRuntimeAdapter: vi.fn(),
   runtimeAdapterRegister: vi.fn(),
   runtimeLabel: (runtime: { id: string; version?: string; accelerator: string; installation: string }) => `${runtime.version ?? runtime.id} · ${runtime.accelerator} · ${runtime.installation}`,
@@ -308,7 +316,8 @@ describe("RuntimesPanel pull-request builds", () => {
     expect(mocked.rtInstall).toHaveBeenCalledWith('cpu', 'b10638');
     expect(mocked.rtImport).not.toHaveBeenCalled();
     const owner = getTaskSnapshot().find(task => task.id === 'runtime-operation')!;
-    expect(owner.label).toMatch(/cpu/);
+    expect(owner.label).toBe('llama.cpp · CPU-only · b10638');
+    expect(owner.downloadKind).toBe('runtime');
     const report = defined(vi.mocked(api.onRuntimeProgress).mock.calls[0])[0];
     act(() => { report({ backend: 'cpu', build: 'b10638', phase: 'downloading', received: 512, total: 1024 }); });
     expect(screen.getByRole('progressbar', { name: 'cpu installed builds' })).toHaveAttribute('value', '50');
@@ -345,7 +354,7 @@ describe("RuntimesPanel pull-request builds", () => {
     fireEvent.click(next);
     expect(mocked.rtInstall).toHaveBeenCalledTimes(2);
     expect(mocked.rtInstall).toHaveBeenLastCalledWith('vulkan', 'b10638');
-    expect(getTaskSnapshot().find(task => task.id === 'runtime-operation')).toMatchObject({ state: 'running', label: expect.stringContaining('vulkan') as unknown });
+    expect(getTaskSnapshot().find(task => task.id === 'runtime-operation')).toMatchObject({ state: 'running', label: 'llama.cpp · Vulkan · b10638', downloadKind: 'runtime' });
   });
 
   it('does not let a late install completion finish a replacement runtime task', async () => {
@@ -679,7 +688,7 @@ describe("RuntimesPanel pull-request builds", () => {
     } satisfies api.InstalledRuntime);
     renderPanel();
     await startPullRequestBuild();
-    await screen.findByText(/Installed cuda from llama\.cpp PR #27342\./);
+    await screen.findByText(/Installed CUDA \(NVIDIA\) from llama\.cpp PR #27342\./);
     expect(screen.queryByText(/replacing the earlier build/)).not.toBeInTheDocument();
   });
 
@@ -1408,5 +1417,149 @@ describe('neutral inference engine inventory', () => {
         await act(async () => { finishCatalog(BUILTINS); });
       }
     });
+  });
+
+  it("formats runtime downloads with proper Korean labels, retains speed across slow ticks, and clears sentinel bytes on non-download phases", async () => {
+    let finishInstall!: (value: api.InstalledRuntime) => void;
+    let progressListener!: (progress: api.DownloadProgress) => void;
+    let now = 1000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    mocked.providerCatalog.mockResolvedValue(BUILTINS);
+    mocked.providerRuntimes.mockResolvedValue([]);
+    mocked.sessionSummaryList.mockResolvedValue([]);
+    mocked.rtList.mockResolvedValue([]);
+    mocked.rtLatest.mockImplementation(async (backend: string) => ({
+      build: "b10638",
+      file_name: `llama-b10638-bin-win-${backend}-x64.zip`,
+      url: "https://example.invalid/runtime.zip",
+    }));
+    mocked.deviceProfile.mockResolvedValue({
+      ...NVIDIA_REPORT,
+      backends: [{ backend: "rocm", fit: "recommended", reason: "amd" }],
+    });
+    mocked.onRuntimeProgress.mockImplementation(async (listener: (progress: api.DownloadProgress) => void) => {
+      progressListener = listener;
+      return () => undefined;
+    });
+    mocked.rtInstall.mockImplementation(() => new Promise(resolve => { finishInstall = resolve; }));
+
+    try {
+      render(
+        <I18nProvider initialLocale="ko">
+          <RuntimesPanel store={store} engineRequest={LLAMA_REQUEST} />
+        </I18nProvider>,
+      );
+
+      fireEvent.click(await screen.findByRole("button", { name: /b10638.*ROCm \(AMD\)/ }));
+      await waitFor(() => expect(progressListener).toBeDefined());
+
+      expect(getTaskSnapshot().find(task => task.id === "runtime-operation")).toMatchObject({
+        kind: "runtime",
+        downloadKind: "runtime",
+        label: "llama.cpp · ROCm (AMD) · b10638",
+        phase: "preparing",
+      });
+
+      act(() => {
+        now = 1000;
+        progressListener({ backend: "rocm", build: "b10638", phase: "downloading", received: 0, total: 10_000_000 });
+        now = 2000;
+        progressListener({ backend: "rocm", build: "b10638", phase: "downloading", received: 2_000_000, total: 10_000_000 });
+      });
+      expect(getTaskSnapshot().find(task => task.id === "runtime-operation")?.speedBps).toBe(2_000_000);
+      expect(screen.getByText(/1\.9 MiB \/ 9\.5 MiB · 1\.9 MiB\/s/)).toBeVisible();
+
+      // Even after a >3s gap without chunks, the fallback anchor keeps speed populated instead of flickering off.
+      act(() => {
+        now = 6500;
+        progressListener({ backend: "rocm", build: "b10638", phase: "downloading", received: 3_000_000, total: 10_000_000 });
+      });
+      const afterPause = getTaskSnapshot().find(task => task.id === "runtime-operation");
+      expect(afterPause?.speedBps).toBeGreaterThan(0);
+
+      // Non-byte phases must clear sentinel (1, 1) / (1, 3) counts in both the task and row card.
+      for (const nonByte of [
+        { phase: "verified", received: 1, total: 1 },
+        { phase: "preflight", received: 1, total: 3 },
+      ]) {
+        act(() => {
+          progressListener({ backend: "rocm", build: "b10638", ...nonByte });
+        });
+        const current = getTaskSnapshot().find(task => task.id === "runtime-operation");
+        expect(current?.phase).toBe(nonByte.phase);
+        expect(current?.received).toBeUndefined();
+        expect(current?.total).toBeUndefined();
+        expect(current?.speedBps).toBeUndefined();
+        expect(screen.queryByText(/1 B \//)).not.toBeInTheDocument();
+        expect(screen.getByRole("progressbar")).not.toHaveAttribute("value");
+      }
+
+      await act(async () => finishInstall({ backend: "rocm", build: "b10638", dir: "/synthetic/rocm", size_mb: 1 }));
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("shows determinate bytes and speed inside RuntimePullRequestCard during PR download", async () => {
+    let emitProgress: ((progress: api.DownloadProgress) => void) | undefined;
+    let now = 1000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    mocked.rtPrPreview.mockResolvedValueOnce(PREVIEW);
+    mocked.rtInstallPr.mockImplementationOnce(() => new Promise(() => undefined));
+    mocked.onRuntimeProgress.mockImplementation(async (callback: (progress: api.DownloadProgress) => void) => {
+      emitProgress = callback;
+      return () => undefined;
+    });
+    try {
+      renderPanel();
+      fireEvent.click(screen.getByText("Advanced"));
+      await startPullRequestBuild();
+      await waitFor(() => expect(emitProgress).toBeTypeOf("function"));
+
+      await act(async () => {
+        now = 1000;
+        emitProgress?.({ backend: "cuda", build: "pr27342", phase: "downloading", received: 0, total: 100 * 1024 * 1024 });
+        now = 2000;
+        emitProgress?.({ backend: "cuda", build: "pr27342", phase: "downloading", received: 50 * 1024 * 1024, total: 100 * 1024 * 1024 });
+      });
+
+      const prCard = screen.getByRole("heading", { name: "Install a llama.cpp PR build" }).closest("section")!;
+      expect(within(prCard).getByRole("progressbar", { name: "Building PR" })).toHaveAttribute("value", "50");
+      expect(within(prCard).getByText("50.0 MiB / 100.0 MiB · 50.0 MiB/s")).toBeVisible();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("opens only DownloadsCenter and keeps ActivityCenter closed when a runtime download fails", async () => {
+    mocked.rtList.mockResolvedValue([]);
+    mocked.rtLatest.mockImplementation(async (backend: string) => ({
+      build: "b10638",
+      file_name: `llama-b10638-bin-win-${backend}-x64.zip`,
+      url: "https://example.invalid/runtime.zip",
+    }));
+    mocked.deviceProfile.mockResolvedValue({
+      ...NVIDIA_REPORT,
+      backends: [{ backend: "rocm", fit: "recommended", reason: "amd" }],
+    });
+    mocked.rtInstall.mockRejectedValueOnce(new Error("ROCm SDK missing"));
+
+    render(
+      <I18nProvider initialLocale="en">
+        <PanelFeedbackProvider>
+          <DownloadsCenter />
+          <ActivityCenter hasActivity={false} title="Tasks" attentionMessage="Attention needed" globalError={false}>
+            <PanelFeedbackOutlet />
+          </ActivityCenter>
+          <RuntimesPanel store={store} engineRequest={LLAMA_REQUEST} />
+        </PanelFeedbackProvider>
+      </I18nProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Install b10638: ROCm (AMD)" }));
+    const downloadsPopover = await screen.findByTestId("downloads-center-popover");
+    expect(within(downloadsPopover).getByRole("alert")).toHaveTextContent("ROCm SDK missing");
+    expect(screen.getByTestId("activity-center-popover")).toHaveAttribute("hidden");
+    expect(screen.queryByTestId("activity-center-badge")).not.toBeInTheDocument();
   });
 });

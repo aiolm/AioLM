@@ -162,3 +162,79 @@ async fn stalled_runtime_download_cancels_during_headers_and_body_reads() {
         let _ = fs::remove_dir_all(root);
     }
 }
+
+#[tokio::test]
+async fn runtime_download_throttles_progress_events_and_reports_final_bytes() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let root = test_directory("throttled-download");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("runtime.zip");
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let url = format!("http://{}/runtime.zip", listener.local_addr().unwrap());
+
+    const CHUNK_COUNT: usize = 200;
+    const CHUNK_LEN: usize = 4096;
+    const TOTAL_BYTES: usize = CHUNK_COUNT * CHUNK_LEN;
+    let payload = vec![b'a'; CHUNK_LEN];
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        while !request.ends_with(b"\r\n\r\n") {
+            let mut byte = [0_u8; 1];
+            socket.read_exact(&mut byte).await.unwrap();
+            request.extend_from_slice(&byte);
+        }
+        let headers = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {TOTAL_BYTES}\r\nConnection: close\r\n\r\n"
+        );
+        socket.write_all(headers.as_bytes()).await.unwrap();
+        for _ in 0..CHUNK_COUNT {
+            socket.write_all(&payload).await.unwrap();
+        }
+        socket.flush().await.unwrap();
+        socket.shutdown().await.unwrap();
+    });
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    let updates = Mutex::new(Vec::new());
+    let progress = |phase: &str, received, total| {
+        updates
+            .lock()
+            .unwrap()
+            .push((phase.to_owned(), received, total));
+    };
+
+    download_request_to_file_with_interval(
+        &progress,
+        "downloading",
+        download_http().get(&url),
+        &path,
+        &cancel,
+        |resolved| {
+            assert_eq!(
+                reqwest::Url::parse(resolved).unwrap().host_str(),
+                Some("127.0.0.1")
+            );
+            Ok(())
+        },
+        Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+
+    server.await.unwrap();
+    assert_eq!(fs::metadata(&path).unwrap().len(), TOTAL_BYTES as u64);
+    let recorded = updates.lock().unwrap().clone();
+    assert!(
+        recorded.len() <= 3,
+        "expected throttled updates (first + final), got {} events",
+        recorded.len()
+    );
+    assert_eq!(
+        recorded.last().cloned(),
+        Some(("downloading".to_owned(), TOTAL_BYTES as f64, TOTAL_BYTES as f64))
+    );
+    let _ = fs::remove_dir_all(root);
+}

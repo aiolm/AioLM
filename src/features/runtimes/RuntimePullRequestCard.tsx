@@ -2,7 +2,8 @@ import StableLabel from "../../shared/ui/StableLabel";
 import ProgressBar from "../../shared/ui/ProgressBar";
 import type { MutableRefObject } from "react";
 import { CustomSelect } from "../../shared/ui/CustomSelect";
-import { canBuildPrBackend, buildPhaseLabelKey } from "../../shared/runtime/runtimeUtils";
+import { canBuildPrBackend, buildPhaseLabelKey, isRuntimeDownloadPhase } from "../../shared/runtime/runtimeUtils";
+import { formatBytes, formatSpeedBps } from "../../shared/lib/units";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
 import { BACKENDS, type BackendRow } from "./runtimesHelpers";
 import type * as api from "../../shared/api/types";
@@ -20,13 +21,33 @@ interface Props {
   serverRunning: boolean;
   rows: BackendRow[];
   activePrProgress: api.DownloadProgress | null | undefined;
+  downloadSpeedBps?: number;
   onReview: () => void;
 }
 
 export default function RuntimePullRequestCard({
   t, prBackend, setPrBackend, prBackendTouched, prSource, setPrSource, prBusy, bundleBusy, prReviewBusy,
-  serverRunning, rows, activePrProgress, onReview,
+  serverRunning, rows, activePrProgress, downloadSpeedBps, onReview,
 }: Props) {
+  const isPrDownload = Boolean(activePrProgress && isRuntimeDownloadPhase(activePrProgress.phase));
+  const showPrBytes = Boolean(
+    activePrProgress && isPrDownload && (activePrProgress.total > 0 || activePrProgress.received > 0),
+  );
+  const prPercent =
+    activePrProgress && isPrDownload && activePrProgress.total > 0
+      ? Math.min(100, Math.round((activePrProgress.received / activePrProgress.total) * 100))
+      : undefined;
+  const prDetail = (() => {
+    if (!activePrProgress || !showPrBytes) return null;
+    const moved = activePrProgress.total > 0
+      ? `${formatBytes(activePrProgress.received)} / ${formatBytes(activePrProgress.total)}`
+      : formatBytes(activePrProgress.received);
+    if (downloadSpeedBps !== undefined && Number.isFinite(downloadSpeedBps) && downloadSpeedBps >= 0) {
+      return `${moved} · ${formatSpeedBps(downloadSpeedBps)}`;
+    }
+    return moved;
+  })();
+
   return (
     <section className="app-card runtime-tool" aria-labelledby="pull-request-runtime-heading">
       <div className="runtime-tool__header">
@@ -64,7 +85,7 @@ export default function RuntimePullRequestCard({
         </div>
       </div>
       <div className="runtime-progress-slot">
-        {prBusy && activePrProgress && <div role="status" aria-live="polite"><div className="runtime-progress-label"><span>{t(`ui.${buildPhaseLabelKey(activePrProgress.phase)}`)}</span><span>{t("ui.installingPr")}</span></div><ProgressBar label={t("ui.installingPr")} /></div>}
+        {prBusy && activePrProgress && <div role="status" aria-live="polite"><div className="runtime-progress-label"><span>{t(`ui.${buildPhaseLabelKey(activePrProgress.phase)}`)}</span>{prDetail ? <span className="runtime-number">{prDetail}</span> : <span>{t("ui.installingPr")}</span>}</div><ProgressBar label={t("ui.installingPr")} value={prPercent} /></div>}
       </div>
     </section>
   );

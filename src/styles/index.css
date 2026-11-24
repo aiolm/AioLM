@@ -27,7 +27,7 @@
   button, input, textarea { font: inherit; }
   button, summary { cursor: pointer; }
   button:disabled { cursor: not-allowed; }
- button { transition: background 160ms ease, color 160ms ease, border-color 160ms ease; }
+ button { transition: background-color 160ms ease, color 160ms ease, border-color 160ms ease; }
  :focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
  :focus:not(:focus-visible) { outline: none; }
  h1, h2, h3, h4, p { margin: 0; }

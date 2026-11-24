@@ -2,7 +2,6 @@
 .panel-loading { position: absolute; inset: 0; display: grid; place-items: center; height: 100%; min-height: 160px; background: var(--ui-bg); color: var(--ui-muted); font-size: var(--ui-text-support); }
 .panel-spinner { display: block; width: 48px; height: 6px; border-radius: var(--ui-radius-pill); background: var(--ui-border-strong); opacity: 0.75; animation: app-shimmer 1.2s ease-in-out infinite; }
 @keyframes app-shimmer { 50% { opacity: .25; } }
-@keyframes app-feedback-appear { from { opacity: 0; } to { opacity: 1; } }
 .app-page-scroll { padding: var(--ui-canvas-padding); }
 /* The body title names the work under the toolbar's location label. */
 .app-page-header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 8px 24px; margin-bottom: 20px; }

@@ -1,5 +1,5 @@
 import ModelName from '../../shared/ui/ModelName';
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import type { ChatThread } from "../../shared/api/conversationTypes";
 import type { ChatPhase } from "./chatSendTypes";
 import type { ChatTextKey } from "../../shared/i18n/chatI18n";
@@ -56,24 +56,44 @@ export default function ChatConversationHeader({
       }
       details.open = false;
     };
-    const details = detailsRef.current;
-    const popover = popoverRef.current;
-    const scroller = details?.closest<HTMLElement>(".app-page-scroll");
-    const fitPopover = () => {
-      if (!details?.open || !popover) return;
-      // Expanded task activity can reduce the workspace without a window resize.
-      const bottom = Math.min(window.innerHeight, scroller?.getBoundingClientRect().bottom ?? window.innerHeight);
-      const available = Math.max(0, bottom - popover.getBoundingClientRect().top - 8);
-      popover.style.setProperty("--chat-settings-available-height", `${available}px`);
-    };
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(fitPopover);
-    observer?.observe(scroller ?? document.documentElement);
-    details?.addEventListener("toggle", fitPopover);
-    scroller?.addEventListener("scroll", fitPopover, { passive: true });
-    window.addEventListener("resize", fitPopover);
     document.addEventListener("mousedown", handleClickOutside);
     return () => {
       document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    const details = detailsRef.current;
+    const summary = summaryRef.current;
+    const popover = popoverRef.current;
+    const scroller = details?.closest<HTMLElement>(".app-page-scroll");
+    const fitPopover = () => {
+      if (!popover) return;
+      // Expanded task activity can reduce the workspace without a window resize.
+      const scrollerRect = scroller?.getBoundingClientRect();
+      const bottom = scrollerRect && scrollerRect.height > 0
+        ? Math.min(window.innerHeight, scrollerRect.bottom)
+        : window.innerHeight;
+      let top: number | null = null;
+      if (details?.open) {
+        top = popover.getBoundingClientRect().top;
+      } else {
+        const summaryRect = summary?.getBoundingClientRect();
+        if (summaryRect && summaryRect.height > 0) top = summaryRect.bottom + 8;
+      }
+      if (top === null) return;
+      const available = Math.max(0, bottom - top - 8);
+      popover.style.setProperty("--chat-settings-available-height", `${available}px`);
+    };
+    fitPopover();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(fitPopover);
+    observer?.observe(scroller ?? document.documentElement);
+    summary?.addEventListener("pointerdown", fitPopover);
+    details?.addEventListener("toggle", fitPopover);
+    scroller?.addEventListener("scroll", fitPopover, { passive: true });
+    window.addEventListener("resize", fitPopover);
+    return () => {
+      summary?.removeEventListener("pointerdown", fitPopover);
       details?.removeEventListener("toggle", fitPopover);
       scroller?.removeEventListener("scroll", fitPopover);
       window.removeEventListener("resize", fitPopover);
@@ -88,7 +108,7 @@ export default function ChatConversationHeader({
           id="chat-thread-toggle-button"
           type="button"
           onClick={() => setThreadPanelOpen((current) => !current)}
-          className="chat-thread-toggle app-button app-button--secondary app-button--sm"
+          className="chat-thread-toggle app-button app-button--secondary"
           aria-expanded={threadPanelOpen}
           aria-controls="chat-thread-panel"
         >

@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { OverlayContainerContext } from './CustomSelect';
 import { createPortal } from "react-dom";
 import { useI18n } from "../i18n/i18n";
@@ -31,7 +31,7 @@ export default function Tooltip({ content, label, id }: TooltipProps) {
   const [pinned, setPinned] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const open = ((hovered || focused) && !dismissed) || pinned;
-  const [position, setPosition] = useState<CSSProperties>({ left: 16, top: 16 });
+  const [position, setPosition] = useState<CSSProperties | null>(null);
 
   const updatePosition = useCallback(() => {
     const trigger = triggerRef.current;
@@ -48,8 +48,26 @@ export default function Tooltip({ content, label, id }: TooltipProps) {
     const top = below + measuredHeight <= window.innerHeight - 16
       ? Math.max(minTop, below)
       : Math.max(minTop, rect.top - measuredHeight - 7);
-    setPosition({ left, top, width });
+    setPosition((previous) =>
+      previous?.left === left && previous?.top === top && previous?.width === width
+        ? previous
+        : { left, top, width },
+    );
   }, []);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPosition(null);
+      return;
+    }
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, { capture: true, passive: true });
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [open, updatePosition]);
 
   useEffect(() => {
     if (!open) return;
@@ -63,21 +81,14 @@ export default function Tooltip({ content, label, id }: TooltipProps) {
     };
     window.addEventListener("aiolm:navigate", dismiss);
     window.addEventListener("keydown", onKeyDown, true);
-    updatePosition();
-    const frame = window.requestAnimationFrame(updatePosition);
-    window.addEventListener("resize", updatePosition);
-    window.addEventListener("scroll", updatePosition, { capture: true, passive: true });
     return () => {
       window.removeEventListener("aiolm:navigate", dismiss);
       window.removeEventListener("keydown", onKeyDown, true);
-      window.cancelAnimationFrame(frame);
-      window.removeEventListener("resize", updatePosition);
-      window.removeEventListener("scroll", updatePosition, true);
     };
-  }, [open, updatePosition]);
+  }, [open]);
 
   const popover = typeof document !== "undefined" ? createPortal(
-    <span ref={popoverRef} id={tooltipId} role="tooltip" className={`app-tooltip-popover ${open ? "is-open" : ""}`} style={position}>
+    <span ref={popoverRef} id={tooltipId} role="tooltip" className={`app-tooltip-popover ${open && position ? "is-open" : ""}`} style={position ?? undefined}>
       {title && <strong className="app-tooltip-title">{normalizeDisplayText(title)}</strong>}
       <span>{normalizeDisplayText(description)}</span>
     </span>,

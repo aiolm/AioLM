@@ -24,6 +24,12 @@ export interface AppTask {
   cancel?: () => Promise<void> | void;
   /** Launch intent is independent of backend polling until readiness settles it. */
   targetId?: string;
+  /** Repository/file metadata for concurrent downloads and Discover row matching. */
+  repoId?: string;
+  filePath?: string;
+  downloadKind?: "gguf" | "snapshot" | "update" | "runtime" | "app-update";
+  includeCompanions?: boolean;
+  modelsDir?: string;
   action?: { label: string; onClick: () => void };
   /**
    * Which completion alert a successful finish may raise. Model downloads and
@@ -41,10 +47,16 @@ const NOTIFY_BY_KIND: Partial<Record<TaskKind, CompletionNotificationKind>> = {
 /** How long a task that ended as expected stays on screen before clearing. */
 export const TASK_CLEAR_DELAY_MS = 6000;
 
+export function isDownloadCenterTask(task: Pick<AppTask, "kind" | "downloadKind">): boolean {
+  return task.kind === "model-download" || task.downloadKind === "runtime" || task.downloadKind === "app-update";
+}
+
 const tasks = new Map<string, AppTask>();
 const clearTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const listeners = new Set<() => void>();
 let snapshot: AppTask[] = [];
+let modelDownloadSnapshot: AppTask[] = [];
+let downloadCenterSnapshot: AppTask[] = [];
 
 function cancelClear(id: string) {
   const timer = clearTimers.get(id);
@@ -55,6 +67,20 @@ function cancelClear(id: string) {
 
 function publish() {
   snapshot = [...tasks.values()].sort((left, right) => right.startedAt - left.startedAt);
+  const nextDownloads = snapshot.filter((task) => task.kind === "model-download");
+  if (
+    nextDownloads.length !== modelDownloadSnapshot.length
+    || nextDownloads.some((task, index) => task !== modelDownloadSnapshot[index])
+  ) {
+    modelDownloadSnapshot = nextDownloads;
+  }
+  const nextDownloadCenter = snapshot.filter(isDownloadCenterTask);
+  if (
+    nextDownloadCenter.length !== downloadCenterSnapshot.length
+    || nextDownloadCenter.some((task, index) => task !== downloadCenterSnapshot[index])
+  ) {
+    downloadCenterSnapshot = nextDownloadCenter;
+  }
   for (const listener of listeners) listener();
 }
 
@@ -76,6 +102,10 @@ export function updateTask(id: string, patch: Partial<Omit<AppTask, "id">>) {
   const current = tasks.get(id);
   if (!current) return;
   if (patch.state === "running" || patch.state === "cancelling") cancelClear(id);
+  const changed = (Object.keys(patch) as Array<keyof Omit<AppTask, "id">>).some(
+    (key) => !Object.is(current[key], patch[key]),
+  );
+  if (!changed) return;
   tasks.set(id, { ...current, ...patch });
   publish();
 }
@@ -122,6 +152,10 @@ export function dismissTask(id: string) {
 
 export function getTaskSnapshot(): AppTask[] { return snapshot; }
 
+export function getModelDownloadSnapshot(): AppTask[] { return modelDownloadSnapshot; }
+
+export function getDownloadCenterSnapshot(): AppTask[] { return downloadCenterSnapshot; }
+
 export function subscribeTasks(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
@@ -129,4 +163,8 @@ export function subscribeTasks(listener: () => void): () => void {
 
 export function useTasks(): AppTask[] {
   return useSyncExternalStore(subscribeTasks, getTaskSnapshot, getTaskSnapshot);
+}
+
+export function useDownloadCenterTasks(): AppTask[] {
+  return useSyncExternalStore(subscribeTasks, getDownloadCenterSnapshot, getDownloadCenterSnapshot);
 }

@@ -26,11 +26,11 @@ pub(crate) struct AppState {
     pub(crate) bench_cancel: Arc<AtomicBool>,
     pub(crate) bench_process: Arc<Mutex<Option<crate::procutil::ProcessHandle>>>,
     pub(crate) runtime_cancel: Arc<AtomicBool>,
-    pub(crate) discover_cancel: Arc<AtomicBool>,
     pub(crate) verify_cancel: Arc<AtomicBool>,
     pub(crate) model_scans: Arc<models::ScanRegistry>,
     pub(crate) media_jobs: Arc<crate::media::jobs::MediaJobs>,
     pub(crate) launch_jobs: Arc<crate::launch_jobs::LaunchJobs>,
+    pub(crate) download_jobs: Arc<crate::download_jobs::DownloadJobs>,
     /// The external API listener. It is independent of every model process:
     /// starting, stopping or replacing models never touches it, and stopping
     /// it never unloads a model.
@@ -71,11 +71,11 @@ impl Default for AppState {
             bench_cancel: Arc::new(AtomicBool::new(false)),
             bench_process: Arc::new(Mutex::new(None)),
             runtime_cancel: Arc::new(AtomicBool::new(false)),
-            discover_cancel: Arc::new(AtomicBool::new(false)),
             verify_cancel: Arc::new(AtomicBool::new(false)),
             model_scans: Arc::new(models::ScanRegistry::default()),
             media_jobs: Arc::new(crate::media::jobs::MediaJobs::default()),
             launch_jobs: Arc::new(crate::launch_jobs::LaunchJobs::default()),
+            download_jobs: Arc::new(crate::download_jobs::DownloadJobs::default()),
             gateway: Arc::new(Mutex::new(None)),
             api_control: tokio::sync::Mutex::new(()),
             api_key: gateway::ApiKey::new(new_api_key()),
@@ -221,6 +221,7 @@ impl AppState {
     pub(crate) fn begin_normal_exit(&self) {
         self.media_jobs.cancel_all();
         self.launch_jobs.cancel_all();
+        self.download_jobs.cancel_all();
         let mut normal_exit = self
             .normal_exit
             .lock()

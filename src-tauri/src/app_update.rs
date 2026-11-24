@@ -607,7 +607,8 @@ async fn download_installer(
         create_installer_file(path)
             .map_err(|error| AppError::io("could not write the downloaded installer", &error))?,
     );
-    write_installer(progress, response, file, total, limit, PROGRESS_INTERVAL).await
+    let writer = tokio::io::BufWriter::with_capacity(1024 * 1024, file);
+    write_installer(progress, response, writer, total, limit, PROGRESS_INTERVAL).await
 }
 
 /// Stream an already validated installer response into `file`.
