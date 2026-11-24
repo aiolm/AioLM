@@ -31,12 +31,9 @@ fn begin_download(
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let lease = state.download_jobs.begin(
-        &id,
-        targets,
-        &state.operation,
-        &state.model_download,
-    )?;
+    let lease = state
+        .download_jobs
+        .begin(&id, targets, &state.operation, &state.model_download)?;
     Ok((id, lease))
 }
 
@@ -204,6 +201,7 @@ pub(crate) async fn hf_clear_token() -> Result<discover::HfTokenStatus, AppError
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn hf_download_model(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -292,7 +290,8 @@ mod tests {
         let targets_b =
             download_jobs::gguf_target_keys("owner/beta", "beta.gguf", &root, false).unwrap();
 
-        let (id_a, lease_a) = begin_download(&state, Some("dl-a".into()), targets_a.clone()).unwrap();
+        let (id_a, lease_a) =
+            begin_download(&state, Some("dl-a".into()), targets_a.clone()).unwrap();
         let (id_b, lease_b) = begin_download(&state, Some("dl-b".into()), targets_b).unwrap();
         assert_eq!(id_a, "dl-a");
         assert_eq!(id_b, "dl-b");

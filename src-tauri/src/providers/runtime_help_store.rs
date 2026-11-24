@@ -1378,7 +1378,18 @@ mod tests {
     /// Real owned child processes: the test binary replays synthetic help when
     /// the child marker env is set, mirroring the runtime_help fixtures.
     fn help_command(mode: &str, timeout_ms: u64) -> HelpCommand {
-        let mut environment = BTreeMap::new();
+        let mut environment: BTreeMap<String, String> =
+            super::super::python_env::engine_environment()
+                .into_iter()
+                .map(|(key, value)| {
+                    (
+                        key.into_string().expect("test environment name is Unicode"),
+                        value
+                            .into_string()
+                            .expect("test environment value is Unicode"),
+                    )
+                })
+                .collect();
         environment.insert(CHILD_ENV.into(), mode.into());
         environment.insert("LC_ALL".into(), "C".into());
         HelpCommand {

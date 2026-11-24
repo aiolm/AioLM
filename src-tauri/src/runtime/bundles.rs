@@ -350,7 +350,12 @@ fn prepare_export_root(
     if !cfg!(windows) && !matches!(backend, "cuda" | "rocm") {
         return Ok(None);
     }
-    let snapshot = runtimes_root().join(format!(".runtime-export-{}", short_nonce()));
+    let snapshot_parent = root
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(runtimes_root);
+    let snapshot = snapshot_parent.join(format!(".runtime-export-{}", short_nonce()));
     let result = (|| -> Result<(), AppError> {
         fs::create_dir_all(&snapshot).map_err(|error| AppError::from_io(&error))?;
         copy_runtime_tree(root, &snapshot, cancel)?;
@@ -398,7 +403,10 @@ pub fn export_bundle(
     progress: ProgressSink<'_>,
     cancel: &Arc<AtomicBool>,
 ) -> Result<RuntimeBundleInfo, AppError> {
-    export_bundle_with_interval(
+    validate_runtime_identifiers(backend, build)?;
+    let root = runtime_dir(backend, build)?;
+    export_bundle_from_root_with_interval(
+        &root,
         output,
         backend,
         build,
@@ -408,7 +416,8 @@ pub fn export_bundle(
     )
 }
 
-pub(super) fn export_bundle_with_interval(
+pub(super) fn export_bundle_from_root_with_interval(
+    root: &Path,
     output: &Path,
     backend: &str,
     build: &str,
@@ -417,7 +426,6 @@ pub(super) fn export_bundle_with_interval(
     progress_interval: Duration,
 ) -> Result<RuntimeBundleInfo, AppError> {
     validate_runtime_identifiers(backend, build)?;
-    let root = runtime_dir(backend, build)?;
     if !root.is_dir() {
         return Err(AppError::not_found("the selected runtime is not installed"));
     }
@@ -444,7 +452,7 @@ pub(super) fn export_bundle_with_interval(
             "choose an export location outside the installed runtime directory",
         ));
     }
-    let runtime_bytes = dir_size_bytes(&root);
+    let runtime_bytes = dir_size_bytes(root);
     let export_required = runtime_bytes
         .saturating_mul(2)
         .saturating_add(512 * 1024 * 1024);
@@ -456,7 +464,11 @@ pub(super) fn export_bundle_with_interval(
     ) {
         return Err(AppError::unavailable(error));
     }
-    let snapshot_parent = runtimes_root();
+    let snapshot_parent = root
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(runtimes_root);
     if let Some(error) = free_space_error(
         "runtime export snapshot",
         &snapshot_parent,
@@ -465,8 +477,8 @@ pub(super) fn export_bundle_with_interval(
     ) {
         return Err(AppError::unavailable(error));
     }
-    let snapshot = ExportSnapshot(prepare_export_root(&root, backend, cancel)?);
-    let export_root = snapshot.root(&root);
+    let snapshot = ExportSnapshot(prepare_export_root(root, backend, cancel)?);
+    let export_root = snapshot.root(root);
     let files = collect_runtime_files(export_root)?;
     if files.is_empty() {
         return Err(AppError::validation("cannot export an empty runtime"));

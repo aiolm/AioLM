@@ -4,9 +4,7 @@
 //! ownership claim so server starts and model deletions still wait for every
 //! download to finish, while separate model downloads proceed in parallel and
 //! cancel or clean up independently.
-use crate::discover::{
-    shard_group, validate_repo_id, validate_repo_path, PendingDownload,
-};
+use crate::discover::{shard_group, validate_repo_id, validate_repo_path, PendingDownload};
 use crate::error::AppError;
 use std::collections::{HashMap, VecDeque};
 use std::path::{Component, Path, PathBuf};
@@ -251,15 +249,9 @@ fn keys_conflict(left: &str, right: &str) -> bool {
     if left == right {
         return true;
     }
-    match (
-        left.strip_prefix("tree:"),
-        right.strip_prefix("file:"),
-    ) {
+    match (left.strip_prefix("tree:"), right.strip_prefix("file:")) {
         (Some(tree), Some(file)) => path_within(file, tree),
-        _ => match (
-            right.strip_prefix("tree:"),
-            left.strip_prefix("file:"),
-        ) {
+        _ => match (right.strip_prefix("tree:"), left.strip_prefix("file:")) {
             (Some(tree), Some(file)) => path_within(file, tree),
             _ => match (
                 left.strip_prefix("companion-dir:"),
@@ -420,10 +412,7 @@ pub(crate) fn update_target_keys(path: &str, models_dir: &str) -> Result<Vec<Str
     ) {
         if let Some(shards) = shard_group(name) {
             for shard in shards {
-                keys.push(format!(
-                    "file:{}",
-                    normalize_path_key(&parent.join(shard))
-                ));
+                keys.push(format!("file:{}", normalize_path_key(&parent.join(shard))));
             }
         }
     }
@@ -501,27 +490,12 @@ mod tests {
             .to_string_lossy()
             .into_owned();
 
-        let shard_1 = gguf_target_keys(
-            "owner/split",
-            "Q4/model-00001-of-00002.gguf",
-            &root,
-            true,
-        )
-        .unwrap();
-        let shard_2 = gguf_target_keys(
-            "owner/split",
-            "Q4/model-00002-of-00002.gguf",
-            &root,
-            true,
-        )
-        .unwrap();
-        let separate_quant = gguf_target_keys(
-            "owner/split",
-            "Q8/model-00001-of-00002.gguf",
-            &root,
-            true,
-        )
-        .unwrap();
+        let shard_1 =
+            gguf_target_keys("owner/split", "Q4/model-00001-of-00002.gguf", &root, true).unwrap();
+        let shard_2 =
+            gguf_target_keys("owner/split", "Q4/model-00002-of-00002.gguf", &root, true).unwrap();
+        let separate_quant =
+            gguf_target_keys("owner/split", "Q8/model-00001-of-00002.gguf", &root, true).unwrap();
 
         let _lease_1 = jobs.begin("dl-1", shard_1, &operation, &flag).unwrap();
         let dup = jobs.begin("dl-2", shard_2, &operation, &flag);
@@ -529,7 +503,9 @@ mod tests {
             dup.err().expect("sibling shard must conflict").kind,
             crate::error::ErrorKind::Busy
         );
-        let _lease_q8 = jobs.begin("dl-q8", separate_quant, &operation, &flag).unwrap();
+        let _lease_q8 = jobs
+            .begin("dl-q8", separate_quant, &operation, &flag)
+            .unwrap();
     }
 
     #[test]
@@ -632,7 +608,10 @@ mod tests {
         let _discard_b = jobs.try_discard_pending(&paused_b).unwrap();
         let discard_a = jobs.try_discard_pending(&active_a_pending);
         assert_eq!(
-            discard_a.err().expect("active download discard must fail").kind,
+            discard_a
+                .err()
+                .expect("active download discard must fail")
+                .kind,
             crate::error::ErrorKind::Busy
         );
     }

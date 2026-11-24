@@ -101,60 +101,53 @@ async fn bundle_import_keeps_missing_archive_errors() {
 fn export_bundle_throttles_packaging_progress_updates() {
     let aiolm_home = test_directory("bundle-export-throttle-home");
     let output_dir = test_directory("bundle-export-throttle-out");
-    fs::create_dir_all(&aiolm_home).unwrap();
+    let runtime_root = aiolm_home.join("runtimes").join("b10638-cpu");
+    fs::create_dir_all(&runtime_root).unwrap();
     fs::create_dir_all(&output_dir).unwrap();
-    let original_home = std::env::var_os("AIOLM_HOME");
-    std::env::set_var("AIOLM_HOME", &aiolm_home);
-
-    let result = (|| {
-        let runtime_root = runtimes_root().join("b10638-cpu");
-        fs::create_dir_all(&runtime_root).unwrap();
-        fs::write(runtime_root.join(server_executable_name()), b"server").unwrap();
-        // Write 8 MiB of incompressible data so export loops across multiple 1 MiB reads.
-        let mut blob = vec![0_u8; 8 * 1024 * 1024];
-        for (index, byte) in blob.iter_mut().enumerate() {
-            *byte = ((index * 31) ^ (index >> 8)) as u8;
-        }
-        fs::write(runtime_root.join("weights.bin"), &blob).unwrap();
-
-        let archive = output_dir.join("throttle.zip");
-        let events = Mutex::new(Vec::new());
-        let progress = |phase: &str, received: f64, total: f64| {
-            events.lock().unwrap().push((phase.to_owned(), received, total));
-        };
-        let info = export_bundle_with_interval(
-            &archive,
-            "cpu",
-            "b10638",
-            &progress,
-            &Arc::new(AtomicBool::new(false)),
-            Duration::from_secs(60),
-        )
-        .expect("export synthetic runtime bundle");
-        assert!(Path::new(&info.path).is_file());
-        let recorded = events.lock().unwrap().clone();
-        let packaging: Vec<_> = recorded
-            .iter()
-            .filter(|(phase, _, _)| phase == "packaging")
-            .cloned()
-            .collect();
-        assert_eq!(
-            packaging.len(),
-            2,
-            "expected throttled packaging updates (first + final), got {:?}",
-            packaging
-        );
-        assert_eq!(packaging.last().unwrap().1, packaging.last().unwrap().2);
-        assert_eq!(recorded.last().unwrap().0, "installed");
-    })();
-
-    match original_home {
-        Some(home) => std::env::set_var("AIOLM_HOME", home),
-        None => std::env::remove_var("AIOLM_HOME"),
+    fs::write(runtime_root.join(server_executable_name()), b"server").unwrap();
+    // Write 8 MiB of incompressible data so export loops across multiple 1 MiB reads.
+    let mut blob = vec![0_u8; 8 * 1024 * 1024];
+    for (index, byte) in blob.iter_mut().enumerate() {
+        *byte = ((index * 31) ^ (index >> 8)) as u8;
     }
+    fs::write(runtime_root.join("weights.bin"), &blob).unwrap();
+
+    let archive = output_dir.join("throttle.zip");
+    let events = Mutex::new(Vec::new());
+    let progress = |phase: &str, received: f64, total: f64| {
+        events
+            .lock()
+            .unwrap()
+            .push((phase.to_owned(), received, total));
+    };
+    let info = export_bundle_from_root_with_interval(
+        &runtime_root,
+        &archive,
+        "cpu",
+        "b10638",
+        &progress,
+        &Arc::new(AtomicBool::new(false)),
+        Duration::from_secs(60),
+    )
+    .expect("export synthetic runtime bundle");
+    assert!(Path::new(&info.path).is_file());
+    let recorded = events.lock().unwrap().clone();
+    let packaging: Vec<_> = recorded
+        .iter()
+        .filter(|(phase, _, _)| phase == "packaging")
+        .cloned()
+        .collect();
+    assert_eq!(
+        packaging.len(),
+        2,
+        "expected throttled packaging updates (first + final), got {:?}",
+        packaging
+    );
+    assert_eq!(packaging.last().unwrap().1, packaging.last().unwrap().2);
+    assert_eq!(recorded.last().unwrap().0, "installed");
+
     let _ = fs::remove_dir_all(aiolm_home);
     let _ = fs::remove_dir_all(output_dir);
-    result
 }
 
 /// This is intentionally opt-in and ignored: it copies the locally

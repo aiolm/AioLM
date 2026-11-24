@@ -93,10 +93,7 @@ fn tray_strings(locale: &str) -> TrayStrings {
 }
 
 fn compact_model_label(name: &str) -> String {
-    let cleaned: String = name
-        .chars()
-        .filter(|c| !c.is_control())
-        .collect();
+    let cleaned: String = name.chars().filter(|c| !c.is_control()).collect();
     let trimmed = cleaned.trim();
     if trimmed.chars().count() <= 48 {
         trimmed.to_owned()
@@ -111,7 +108,9 @@ fn format_status_line(state: &TrayPresentation) -> (String, String, bool) {
     match state.model_state.as_str() {
         "running" => {
             let status = match state.model_name.as_deref().map(compact_model_label) {
-                Some(name) if !name.is_empty() => format!("{}: {name}", strings.status_running_prefix),
+                Some(name) if !name.is_empty() => {
+                    format!("{}: {name}", strings.status_running_prefix)
+                }
                 _ => strings.status_running_prefix.to_owned(),
             };
             let tooltip = format!("AioLM — {status}");

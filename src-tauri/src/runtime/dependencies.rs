@@ -798,7 +798,9 @@ pub(super) fn copy_backend_runtime_dependencies_from_roots_with_context(
         return Err(AppError::unavailable(format!("could not package the ROCm rocblas/hipblaslt library data needed at runtime. The HIP SDK's bin/rocblas and bin/hipblaslt directories must be available; {suffix}")));
     }
     if backend == "rocm" && found_data == 0 {
-        return Err(AppError::unavailable(format!("the ROCm SDK exposed runtime DLLs but no rocblas/hipblaslt kernel data; {suffix}")));
+        return Err(AppError::unavailable(format!(
+            "the ROCm SDK exposed runtime DLLs but no rocblas/hipblaslt kernel data; {suffix}"
+        )));
     }
     Ok(())
 }

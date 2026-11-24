@@ -6,12 +6,12 @@ mod snapshots;
 mod updates;
 use crate::error::{AppError, ErrorKind};
 use futures_util::StreamExt;
+#[cfg(test)]
+pub use pending::PendingFile;
 pub use pending::{
     discard as discard_pending_download, find as find_pending_download, list as pending_downloads,
     PendingDownload,
 };
-#[cfg(test)]
-pub use pending::PendingFile;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 pub use snapshots::{download_snapshot, installed_snapshots};
@@ -790,7 +790,9 @@ pub async fn search_format(
     let response = apply_hf_auth(client()?.get(url.clone()), &url)
         .send()
         .await
-        .map_err(|error| network_error(&error, format!("Hugging Face model search failed: {error}")))?;
+        .map_err(|error| {
+            network_error(&error, format!("Hugging Face model search failed: {error}"))
+        })?;
     validate_response_url(&response)?;
     let items: Vec<ApiModel> = decode_json(response).await?;
     Ok(items
@@ -932,8 +934,8 @@ async fn repository_tree(
                 "repository pagination exceeded its limit",
             ));
         }
-        let parsed = reqwest::Url::parse(&url)
-            .map_err(|error| AppError::validation(error.to_string()))?;
+        let parsed =
+            reqwest::Url::parse(&url).map_err(|error| AppError::validation(error.to_string()))?;
         let response = tokio::select! {
             _ = crate::cancellation::wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
             response = apply_hf_auth(client()?.get(parsed.clone()), &parsed).send() => response.map_err(|error| network_error(&error, error.to_string()))?
@@ -1360,6 +1362,7 @@ fn model_download_plan(files: &[HfFile], file_path: &str) -> Result<Vec<HfFile>,
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn download(
     app: AppHandle,
     download_id: &str,
@@ -2650,10 +2653,15 @@ mod tests {
             "https://cas-bridge.xethub.hf.co/blob",
             "https://example.com/file.gguf",
         ] {
-            assert!(!should_send_hf_auth(&reqwest::Url::parse(url).unwrap()), "{url}");
+            assert!(
+                !should_send_hf_auth(&reqwest::Url::parse(url).unwrap()),
+                "{url}"
+            );
         }
-        assert!(auth_failure_message(reqwest::StatusCode::UNAUTHORIZED, false)
-            .contains("add a Hugging Face access token"));
+        assert!(
+            auth_failure_message(reqwest::StatusCode::UNAUTHORIZED, false)
+                .contains("add a Hugging Face access token")
+        );
         assert!(auth_failure_message(reqwest::StatusCode::FORBIDDEN, true)
             .contains("Accept the model license"));
 

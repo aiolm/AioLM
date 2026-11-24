@@ -234,7 +234,11 @@ async fn runtime_download_throttles_progress_events_and_reports_final_bytes() {
     );
     assert_eq!(
         recorded.last().cloned(),
-        Some(("downloading".to_owned(), TOTAL_BYTES as f64, TOTAL_BYTES as f64))
+        Some((
+            "downloading".to_owned(),
+            TOTAL_BYTES as f64,
+            TOTAL_BYTES as f64
+        ))
     );
     let _ = fs::remove_dir_all(root);
 }
