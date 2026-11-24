@@ -16,6 +16,8 @@ const mount = join(root, "mounted image");
 const systemApp = "/Applications/AioLM.app";
 let app = systemApp;
 let mounted = false, installed = false;
+/** @type {string | null} */
+let attachedDevice = null;
 assert.ok(!existsSync(app), "refuse to replace an existing app");
 
 /** @param {string} program @param {string[]} args @param {import("node:child_process").SpawnSyncOptions} [options] @returns {string} */
@@ -29,6 +31,42 @@ function removeInstalledApp() {
   if (app === systemApp) run("sudo", ["rm", "-rf", app]);
   else rmSync(app, { recursive: true, force: true });
   installed = false;
+}
+/** @param {boolean} strict */
+async function detachImage(strict) {
+  if (!mounted && !attachedDevice) return;
+  const primary = attachedDevice ?? mount;
+  /** @type {string[][]} */
+  const attempts = [
+    ["detach", primary],
+    ["detach", primary],
+    ["detach", "-force", primary],
+    ...(attachedDevice ? [["detach", "-force", mount]] : []),
+    ["detach", "-force", primary],
+  ];
+  /** @type {string[]} */
+  const failures = [];
+  for (const [index, args] of attempts.entries()) {
+    const result = spawnSync("/usr/bin/hdiutil", args, { encoding: "utf8", timeout: 180_000 });
+    if (!result.error && result.status === 0) {
+      mounted = false;
+      attachedDevice = null;
+      return;
+    }
+    const detail = result.error ? result.error.message : `${result.stderr}\n${result.stdout}`.trim();
+    if (/No such file or directory/i.test(detail) && !existsSync(join(mount, "AioLM.app"))) {
+      mounted = false;
+      attachedDevice = null;
+      return;
+    }
+    failures.push(`hdiutil ${args.join(" ")}: ${detail}`);
+    if (index + 1 < attempts.length) await delay(500 * (index + 1));
+  }
+  mounted = false;
+  attachedDevice = null;
+  const message = `could not detach mounted DMG (${primary}):\n${failures.join("\n")}`;
+  if (strict) assert.fail(message);
+  console.error(message);
 }
 // LaunchServices passes the decomposed (NFD) file system form of the path,
 // so compare normalized commands rather than the bytes this script created.
@@ -95,7 +133,8 @@ try {
   const files = readdirSync(directory).filter(name => name.endsWith(".dmg"));
   assert.equal(files.length, 1, "expected one host-architecture DMG");
   mkdirSync(mount);
-  run("/usr/bin/hdiutil", ["attach", "-nobrowse", "-readonly", "-mountpoint", mount, join(directory, /** @type {string} */ (files[0]))]);
+  const attachOutput = run("/usr/bin/hdiutil", ["attach", "-nobrowse", "-readonly", "-noautoopen", "-mountpoint", mount, join(directory, /** @type {string} */ (files[0]))]);
+  attachedDevice = attachOutput.split("\n").map(line => /^(\/dev\/disk\d+)\b/.exec(line)?.[1]).find(Boolean) ?? null;
   mounted = true;
   const source = join(mount, "AioLM.app");
   assert.ok(existsSync(source));
@@ -167,8 +206,7 @@ try {
   assert.equal(JSON.parse(readFileSync(join(/** @type {string} */ (env.AIOLM_HOME), "config.json"), "utf8")).ctx_size, 8192);
 
   // install.sh verifies and installs the same DMG into a synthetic folder.
-  run("/usr/bin/hdiutil", ["detach", mount]);
-  mounted = false;
+  await detachImage(true);
   const dmg = join(directory, /** @type {string} */ (files[0]));
   const digest = run("/usr/bin/shasum", ["-a", "256", dmg]).split(" ")[0];
   const scriptApplications = join(home, "Script Applications");
@@ -189,7 +227,13 @@ try {
   removeInstalledApp();
   console.log(`macOS ${process.arch}: DMG metadata, ad-hoc signature, GUI/CLI architecture, system/user Applications install, LaunchServices GUI launch and quit, replacement, settings persistence, install.sh verification/install/replacement and removal passed.`);
 } finally {
-  if (installed) removeInstalledApp();
-  if (mounted) run("/usr/bin/hdiutil", ["detach", mount]);
+  if (installed) {
+    try {
+      removeInstalledApp();
+    } catch (cleanupError) {
+      console.error("cleanup removeInstalledApp failed:", cleanupError);
+    }
+  }
+  await detachImage(false);
   rmSync(root, { recursive: true, force: true });
 }

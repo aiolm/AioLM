@@ -61,7 +61,7 @@ libeconf-0.6.3-r0
 libelf-0.191-r0
 libexpat-2.10.0-r0
 libfdisk-2.40.4-r1
-libffi-3.4.7-r0
+libffi-3.8.1-r0
 libgcc-14.2.0-r4
 libgomp-14.2.0-r4
 libidn2-2.3.7-r0
@@ -144,7 +144,7 @@ xz-libs-5.8.4-r0
 zlib-1.4-r0
 zlib-dev-1.4-r0
 zlib-static-1.4-r0
-zstd-1.5.6-r2
-zstd-dev-1.5.6-r2
-zstd-libs-1.5.6-r2
-zstd-static-1.5.6-r2
+zstd-1.6.0-r0
+zstd-dev-1.6.0-r0
+zstd-libs-1.6.0-r0
+zstd-static-1.6.0-r0
