@@ -1,7 +1,7 @@
 //! Named model session IPC.
 use super::server::{
-    ensure_no_active_requests, prepare_launch, start_on_target, stop_models_for_replacement,
-    stop_session_by_id,
+    acquire_launch_operation, ensure_no_active_requests, prepare_launch, start_on_target,
+    stop_models_for_replacement, stop_session_by_id,
 };
 use crate::error::AppError;
 use crate::{config, server, session, state::AppState};
@@ -57,7 +57,7 @@ pub(super) async fn run_session_start(
     let serving = operation_id
         .map(|id| state.launch_jobs.begin_launch(id, launch_cancel.clone()))
         .transpose()?;
-    let _operation = state.operation.lock().await;
+    let _operation = acquire_launch_operation(state, &launch_cancel).await?;
     if launch_cancel.load(Ordering::Acquire) {
         return Err(AppError::cancelled("server start cancelled"));
     }

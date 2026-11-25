@@ -734,6 +734,7 @@ export default {
     "deletedModelNamed": "Deleted: {name}",
     "deleteFailed": "Delete failed",
     "stopBeforeDelete": "Unload the model before deleting a model.",
+    "stopBenchmarkBeforeDelete": "Wait for the benchmark to finish or cancel it before deleting a model.",
     "stopBeforeProjector": "Unload the model before changing the multimodal projector.",
     "modelPathCopied": "Model path copied.",
     "selectModelNamed": "Select {name}",

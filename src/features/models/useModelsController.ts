@@ -15,6 +15,7 @@ import { startModelScan } from '../../shared/runtime/modelScan';
 import { runSetupGaps } from '../../shared/runtime/runReadiness';
 import { hasActiveModelDownload } from '../../shared/state/modelDownloadTask';
 import type { AppStore } from "../../shared/state/store";
+import { getTaskSnapshot } from "../../shared/state/taskRegistry";
 import { projectorChangeAllowed } from "../chat/visionState";
 import { useModelSettings } from '../model-settings/ModelSettingsProvider';
 import { invalidateModelCatalog, MODEL_CATALOG_CHANGED } from '../model-settings/useModelCatalog';
@@ -23,6 +24,9 @@ import type { ModelSortOrder } from './modelSortCopy';
 import { modelUpdatesCopy } from './modelUpdatesCopy';
 import { isCurrentScan, nextScanGeneration } from "./scanGeneration";
 import { useModelUpdates, type ModelUpdateCatalog } from './useModelUpdates';
+
+/** A running benchmark owns the backend operation gate, which rejects deletion. */
+const benchmarkActive = () => getTaskSnapshot().some(task => task.kind === 'benchmark' && (task.state === 'running' || task.state === 'cancelling'));
 
 export type ModelsPanelProps = { store: AppStore; onSelectModel?: (model: api.GgufModel) => Promise<void>; onDiscoverModels?: () => void; onModels?: (models: api.GgufModel[]) => void; compact?: boolean; active?: boolean; sessions?: api.SessionStatus[]; sessionsReady?: boolean; children?: ReactNode };
 
@@ -341,9 +345,18 @@ export function useModelsController({ store, onSelectModel, onModels, active = t
       notify(t("ui.stopBeforeDelete"));
       return;
     }
+    if (benchmarkActive()) {
+      notify(t("ui.stopBenchmarkBeforeDelete"));
+      return;
+    }
     const remove = async () => {
       setPendingConfirm(null);
       if (hasActiveModelDownload()) return;
+      // A benchmark may have started while the confirmation was open.
+      if (benchmarkActive()) {
+        notify(t("ui.stopBenchmarkBeforeDelete"));
+        return;
+      }
       if (pendingDeletions.current.has(model.path)) return;
       pendingDeletions.current.add(model.path);
       try {

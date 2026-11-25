@@ -443,7 +443,7 @@ pub(super) async fn run_start_server(
     let serving = operation_id
         .map(|id| state.launch_jobs.begin_launch(id, launch_cancel.clone()))
         .transpose()?;
-    let _operation = state.operation.lock().await;
+    let _operation = acquire_launch_operation(state, &launch_cancel).await?;
     if launch_cancel.load(Ordering::Acquire) {
         return Err(AppError::cancelled("server start cancelled"));
     }
@@ -494,6 +494,24 @@ fn stop_target(
     server.active_requests = 0;
     server.touch_activity();
     teardown
+}
+
+/// Queue a model load behind the operation that holds the gate (a benchmark
+/// run, a download or another load), while honoring a cancel pressed during
+/// that wait right away rather than only once the holder finishes.
+pub(super) async fn acquire_launch_operation<'a>(
+    state: &'a AppState,
+    cancel: &AtomicBool,
+) -> Result<tokio::sync::MutexGuard<'a, ()>, AppError> {
+    tokio::select! {
+        biased;
+        guard = state.operation.lock() => Ok(guard),
+        () = async {
+            while !cancel.load(Ordering::Acquire) {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        } => Err(AppError::cancelled("server start cancelled")),
+    }
 }
 
 pub(super) fn cancel_launch_operation(
@@ -649,7 +667,11 @@ pub(crate) async fn apply_request_settings(
     cfg: config::AppConfig,
     session_id: Option<String>,
 ) -> Result<config::execution::ExecutionSettings, AppError> {
-    let _operation = state.operation.lock().await;
+    // Settings apply to a Ready model in place; queueing them behind another
+    // session's load or a benchmark would apply them long after the edit.
+    let _operation = state.operation.try_lock().map_err(|_| {
+        AppError::busy("wait for the current model operation to finish before applying settings")
+    })?;
     let target = activity_target(&state, session_id.as_deref())?;
     let mut server = target
         .lock()
@@ -675,8 +697,13 @@ pub(crate) async fn apply_request_settings(
     Ok(snapshot)
 }
 
+/// Idle unloads skip a tick while another model operation holds the gate
+/// instead of parking the watchdog behind a whole benchmark or model load;
+/// the next tick re-evaluates the idle deadline.
 async fn unload_idle_server(state: &AppState) -> bool {
-    let _operation = state.operation.lock().await;
+    let Ok(_operation) = state.operation.try_lock() else {
+        return false;
+    };
     let teardown = {
         let Ok(mut server) = state.server.lock() else {
             return false;
@@ -699,7 +726,9 @@ async fn unload_idle_server(state: &AppState) -> bool {
 }
 
 async fn unload_idle_named_sessions(state: &AppState) {
-    let _operation = state.operation.lock().await;
+    let Ok(_operation) = state.operation.try_lock() else {
+        return;
+    };
     for entry in state.sessions.entries() {
         let teardown = {
             let Ok(mut server) = entry.state.lock() else {
@@ -836,6 +865,60 @@ fn server_status_response(state: &AppState) -> Result<serde_json::Value, AppErro
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_load_queued_behind_a_benchmark_cancels_without_waiting_for_it() {
+        let state = AppState::default();
+        let benchmark = state.operation.lock().await;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = cancel.clone();
+        let canceller = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            flag.store(true, Ordering::Release);
+        });
+        let error = tokio::time::timeout(
+            Duration::from_secs(5),
+            acquire_launch_operation(&state, &cancel),
+        )
+        .await
+        .expect("a cancel must not wait for the benchmark to finish")
+        .unwrap_err();
+        assert_eq!(error.kind, crate::error::ErrorKind::Cancelled);
+        canceller.await.unwrap();
+        drop(benchmark);
+
+        // Without a cancel the load still queues and proceeds once the gate frees.
+        let cancel = AtomicBool::new(false);
+        assert!(acquire_launch_operation(&state, &cancel).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn idle_unload_skips_a_tick_instead_of_waiting_behind_a_benchmark() {
+        let state = AppState::default();
+        {
+            let mut model = state.server.lock().unwrap();
+            model.lifecycle = server::Lifecycle::Ready;
+            model.execution = Some(config::AppConfig {
+                sleep_idle_seconds: 1,
+                ..Default::default()
+            });
+            model.last_activity_at = std::time::Instant::now() - Duration::from_secs(10);
+        }
+        let benchmark = state.operation.lock().await;
+        let skipped = tokio::time::timeout(Duration::from_secs(5), async {
+            let unloaded = unload_idle_server(&state).await;
+            unload_idle_named_sessions(&state).await;
+            unloaded
+        })
+        .await
+        .expect("the idle watchdog must not queue behind a benchmark");
+        assert!(!skipped);
+        assert_eq!(
+            state.server.lock().unwrap().lifecycle,
+            server::Lifecycle::Ready
+        );
+        drop(benchmark);
+    }
 
     #[test]
     fn python_runtime_status_does_not_report_the_saved_llama_backend() {

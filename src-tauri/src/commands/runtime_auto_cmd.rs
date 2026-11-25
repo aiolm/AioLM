@@ -71,7 +71,7 @@ pub(crate) async fn runtime_auto_connect(
 ) -> Result<auto::ConnectedRuntime, crate::error::AppError> {
     let _operation = Operation::acquire()?;
     let _busy = super::runtimes::RuntimeBusyGuard::acquire(&state.runtime_busy)?;
-    let _mutation = super::runtimes::runtime_change_gate(&state).await;
+    let _mutation = super::runtimes::runtime_change_gate(&state)?;
     if super::runtimes::runtime_resources_in_use(&state)? {
         return Err(crate::error::AppError::busy(
             "stop model sessions before connecting another runtime",

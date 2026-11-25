@@ -712,6 +712,7 @@ export default {
     "deletedModelNamed": "삭제됨: {name}",
     "deleteFailed": "삭제 실패",
     "stopBeforeDelete": "모델을 삭제하기 전에 모델을 언로드하세요.",
+    "stopBenchmarkBeforeDelete": "모델을 삭제하기 전에 벤치마크가 끝날 때까지 기다리거나 벤치마크를 취소하세요.",
     "stopBeforeProjector": "멀티모달 프로젝터를 변경하기 전에 모델을 언로드하세요.",
     "modelPathCopied": "모델 경로를 복사했습니다.",
     "selectModelNamed": "{name} 선택",

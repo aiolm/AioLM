@@ -34,24 +34,27 @@ pub(super) fn runtime_resources_in_use(state: &AppState) -> Result<bool, String>
     Ok(false)
 }
 
-/// Let any server start or stop finish before a runtime change checks
-/// `runtime_resources_in_use`. A model download also holds `operation`, for
-/// its whole transfer, but it already required every session to be stopped,
-/// keeps new starts waiting, and touches no runtime files, so the change
-/// proceeds beside it instead of queueing behind the download. Callers hold
-/// `RuntimeBusyGuard` first, so no start can slip in once the download ends.
-pub(super) async fn runtime_change_gate(
+/// Claim `operation` before a runtime change checks `runtime_resources_in_use`.
+/// A model download also holds `operation`, for its whole transfer, but it
+/// already required every session to be stopped, keeps new starts waiting, and
+/// touches no runtime files, so the change proceeds beside it. Any other holder
+/// (a benchmark run or a model load) is rejected at once instead of queueing:
+/// a queued change would stay silently pending for the whole run and then
+/// apply long after the user asked, ignoring a cancel pressed meanwhile.
+/// Callers hold `RuntimeBusyGuard` first, so no start can slip in once the
+/// download ends.
+pub(super) fn runtime_change_gate(
     state: &AppState,
-) -> Option<tokio::sync::MutexGuard<'_, ()>> {
-    tokio::select! {
-        biased;
-        guard = state.operation.lock() => Some(guard),
-        () = async {
-            while !state.model_download.load(Ordering::Acquire) {
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            }
-        } => None,
+) -> Result<Option<tokio::sync::MutexGuard<'_, ()>>, AppError> {
+    if let Ok(guard) = state.operation.try_lock() {
+        return Ok(Some(guard));
     }
+    if state.model_download.load(Ordering::Acquire) {
+        return Ok(None);
+    }
+    Err(AppError::busy(
+        "wait for the current model or benchmark operation to finish before changing runtimes",
+    ))
 }
 
 impl RuntimeBusyGuard {
@@ -116,7 +119,7 @@ pub(crate) async fn rt_install(
 ) -> Result<runtime::InstalledRuntime, AppError> {
     let _runtime_busy = RuntimeBusyGuard::acquire(&state.runtime_busy)?;
     {
-        let _operation = runtime_change_gate(&state).await;
+        let _operation = runtime_change_gate(&state)?;
         if runtime_resources_in_use(&state)? {
             return Err(AppError::busy("stop the server before changing runtimes"));
         }
@@ -166,7 +169,7 @@ pub(crate) async fn rt_install_pr(
 ) -> Result<runtime::InstalledRuntime, AppError> {
     let _runtime_busy = RuntimeBusyGuard::acquire(&state.runtime_busy)?;
     {
-        let _operation = runtime_change_gate(&state).await;
+        let _operation = runtime_change_gate(&state)?;
         if runtime_resources_in_use(&state)? {
             return Err(AppError::busy("stop the server before changing runtimes"));
         }
@@ -195,7 +198,7 @@ pub(crate) async fn rt_export(
 ) -> Result<runtime::RuntimeBundleInfo, AppError> {
     let _runtime_busy = RuntimeBusyGuard::acquire(&state.runtime_busy)?;
     {
-        let _operation = runtime_change_gate(&state).await;
+        let _operation = runtime_change_gate(&state)?;
         if runtime_resources_in_use(&state)? {
             return Err(AppError::busy("stop the server before exporting a runtime"));
         }
@@ -246,7 +249,7 @@ pub(crate) async fn rt_import(
 ) -> Result<runtime::InstalledRuntime, AppError> {
     let _runtime_busy = RuntimeBusyGuard::acquire(&state.runtime_busy)?;
     {
-        let _operation = runtime_change_gate(&state).await;
+        let _operation = runtime_change_gate(&state)?;
         if runtime_resources_in_use(&state)? {
             return Err(AppError::busy("stop the server before importing a runtime"));
         }
@@ -295,7 +298,7 @@ pub(crate) async fn rt_uninstall(
 ) -> Result<(), AppError> {
     let _runtime_busy = RuntimeBusyGuard::acquire(&state.runtime_busy)?;
     {
-        let _operation = runtime_change_gate(&state).await;
+        let _operation = runtime_change_gate(&state)?;
         if runtime_resources_in_use(&state)? {
             return Err(AppError::busy("stop the server before changing runtimes"));
         }

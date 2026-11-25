@@ -368,33 +368,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runtime_changes_proceed_beside_a_download_but_wait_for_other_operations() {
-        use std::time::Duration;
+    async fn runtime_changes_proceed_beside_a_download_but_reject_other_operations() {
         let state = AppState::default();
         let root = test_models_dir();
         let targets =
             download_jobs::gguf_target_keys("owner/alpha", "alpha.gguf", &root, false).unwrap();
         let (_id, download) = begin_download(&state, None, targets).unwrap();
-        let gate = tokio::time::timeout(
-            Duration::from_secs(5),
-            super::super::runtimes::runtime_change_gate(&state),
-        )
-        .await
-        .expect("a runtime change must not queue behind a model download");
+        let gate = super::super::runtimes::runtime_change_gate(&state)
+            .expect("a runtime change must proceed beside a model download");
         assert!(gate.is_none());
         drop(download);
 
-        // A server start or other model operation still has to finish first.
+        // A benchmark run or model load holding the gate rejects the change at
+        // once instead of leaving it queued until that operation ends.
         let operation = state.operation.lock().await;
-        assert!(tokio::time::timeout(
-            Duration::from_millis(200),
-            super::super::runtimes::runtime_change_gate(&state),
-        )
-        .await
-        .is_err());
+        let error = super::super::runtimes::runtime_change_gate(&state).unwrap_err();
+        assert_eq!(error.kind, crate::error::ErrorKind::Busy);
         drop(operation);
         assert!(super::super::runtimes::runtime_change_gate(&state)
-            .await
+            .unwrap()
             .is_some());
     }
 }

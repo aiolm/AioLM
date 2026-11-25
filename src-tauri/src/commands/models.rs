@@ -222,13 +222,24 @@ fn remove_verified_file(path: &Path, expected: &Path) -> Result<(), AppError> {
     fs::remove_file(path).map_err(|error| AppError::io("cannot delete model file", &error))
 }
 
+/// A benchmark holds `operation` for its whole run. Waiting for it would leave
+/// the request silently pending and delete the file long after the user asked,
+/// so any in-progress model operation rejects the deletion at once.
+fn claim_deletion(state: &AppState) -> Result<tokio::sync::MutexGuard<'_, ()>, AppError> {
+    state.operation.try_lock().map_err(|_| {
+        AppError::busy(
+            "wait for the current model or benchmark operation to finish before deleting a model",
+        )
+    })
+}
+
 #[tauri::command]
 pub(crate) async fn delete_model(
     state: State<'_, AppState>,
     path: String,
     paths: Option<Vec<String>>,
 ) -> Result<(), AppError> {
-    let _operation = state.operation.lock().await;
+    let _operation = claim_deletion(&state)?;
     if state
         .server
         .lock()
@@ -615,6 +626,16 @@ pub fn deletable_model_path(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn deletion_is_rejected_at_once_while_a_benchmark_holds_the_operation_gate() {
+        let state = crate::state::AppState::default();
+        let benchmark = state.operation.lock().await;
+        let error = super::claim_deletion(&state).unwrap_err();
+        assert_eq!(error.kind, crate::error::ErrorKind::Busy);
+        drop(benchmark);
+        assert!(super::claim_deletion(&state).is_ok());
+    }
+
     #[test]
     fn imported_model_publisher_comes_from_repository_folders_inside_library() {
         let root = std::env::temp_dir().join(format!("aiolm-import-{}", uuid::Uuid::new_v4()));
