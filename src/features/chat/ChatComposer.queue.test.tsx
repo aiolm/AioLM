@@ -20,7 +20,7 @@ function props(): ComponentProps<typeof ChatComposer> {
 
 const view = (overrides: Partial<ComponentProps<typeof ChatComposer>> = {}) =>
   render(<I18nProvider initialLocale="en"><ChatComposer {...props()} {...overrides} /></I18nProvider>);
-const actionLabels = () => screen.getAllByRole('button').map(button => button.textContent).filter(label => label === copy.queue || label === copy.steer);
+const actionLabels = () => screen.getAllByRole('button').map(button => button.textContent).filter(label => label === copy.queue || label === copy.queueUntilLoaded || label === copy.steer);
 
 describe('composer queue actions', () => {
   it('offers both actions next to Stop during a reply, preferred action first', () => {
@@ -47,7 +47,9 @@ describe('composer queue actions', () => {
 
   it('offers only queueing while nothing is running to interrupt, and nothing without a draft', () => {
     const { rerender } = view({ phase: 'idle', disabled: true, loadingModel: true });
-    expect(actionLabels()).toEqual([copy.queue]);
+    // Waiting on a load says so, rather than offering a generic queue.
+    expect(actionLabels()).toEqual([copy.queueUntilLoaded]);
+    expect(screen.getByRole('textbox', { name: 'chatMessage' })).toHaveAttribute('placeholder', copy.placeholderLoading);
     rerender(<I18nProvider initialLocale="en"><ChatComposer {...props()} input="" canQueue={false} /></I18nProvider>);
     expect(actionLabels()).toEqual([]);
     expect(screen.getByRole('textbox', { name: 'chatMessage' })).toBeEnabled();
@@ -93,5 +95,13 @@ describe('composer queue actions', () => {
     expect(screen.getByText(copy.paused)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: copy.resume }));
     expect(options.onResumeQueue).toHaveBeenCalledOnce();
+  });
+
+  it('explains a queue paused for a missing model and offers no way to send until one runs', () => {
+    render(<I18nProvider initialLocale="en"><ChatComposer {...props()} phase="idle" queuePaused queuePauseReason="model" modelUnavailable
+      queue={[{ id: 'a', text: 'Waiting', images: [], documents: [], skillIds: [] }]} /></I18nProvider>);
+    expect(screen.getByText(copy.pausedNoModel)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: copy.resume })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: copy.sendNow })).not.toBeInTheDocument();
   });
 });

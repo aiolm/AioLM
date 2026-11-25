@@ -76,6 +76,10 @@ interface ChatComposerProps {
   /** A message that interrupts the running turn and goes before the queue. */
   steering?: QueuedChatMessage | null;
   queuePaused?: boolean;
+  /** Why the queue is paused; `model` means it waits for a model to run again. */
+  queuePauseReason?: 'turn' | 'model' | null;
+  /** No model is loaded or loading, so queued messages cannot be sent or resumed. */
+  modelUnavailable?: boolean;
   /** The draft can wait in the queue (or steer) although it cannot be sent now. */
   canQueue?: boolean;
   busySubmit?: ChatBusySubmit;
@@ -94,7 +98,7 @@ export default function ChatComposer({
   documents, onRemoveDocument, input, setInput, onKeyDown, disabled, enterToSend = true, phase, onAddAttachment, onStop,
   aborting, onSend, canSend, msgsLength, responseState, responseFinishReason, responseWithoutOutput = false, ct, locale = 'en', loadingModel = false,
   skillPicker, selectedSkills = [], onRemoveSkill, skillsLocked = false, selectedSkillsLabel, removeSkillLabel,
-  queue = [], steering = null, queuePaused = false, canQueue = false, busySubmit = 'queue',
+  queue = [], steering = null, queuePaused = false, queuePauseReason = null, modelUnavailable = false, canQueue = false, busySubmit = 'queue',
   onQueue, onSteer, onSteerQueued, onRemoveQueued, onResumeQueue,
 }: ChatComposerProps) {
   const queueCopy = chatQueueCopy[locale];
@@ -185,6 +189,8 @@ export default function ChatComposer({
   const queueActions: 'none' | 'queue' | 'both' = (canSend && !hasQueued) || !canQueue ? 'none' : controlsLocked ? 'both' : 'queue';
   const queueModes: ChatBusySubmit[] = queueActions === 'none' ? [] : queueActions === 'queue' ? ['queue']
     : busySubmit === 'steer' ? ['steer', 'queue'] : ['queue', 'steer'];
+  // With nothing running, a draft waits only for the model being loaded.
+  const waitsForLoad = queueActions === 'queue' && loadingModel;
   const mcpCopy = chatMcpSelectionCopy[locale];
   const mcpSelectionHint = mcpCatalogLoaded ? mcpCopy.unavailableHint : mcpCopy.loadHint;
   const selectedTools = selectedMcpTools.map(key => {
@@ -276,13 +282,13 @@ export default function ChatComposer({
         </div>}
         {(queue.length > 0 || steering) && <div className="chat-queue" role="region" aria-label={queueCopy.queued.replace('{count}', String(queue.length + (steering ? 1 : 0)))}>
           {queuePaused && queue.length > 0 && <div className="chat-queue-paused text-xs ui-color-warning-ink" role="status">
-            <span>{queueCopy.paused}</span>
-            {onResumeQueue && <button type="button" data-icon="play" onClick={onResumeQueue} className="app-button app-button--secondary app-button--sm">{queueCopy.resume}</button>}
+            <span>{queuePauseReason === 'model' ? queueCopy.pausedNoModel : queueCopy.paused}</span>
+            {onResumeQueue && !modelUnavailable && <button type="button" data-icon="play" onClick={onResumeQueue} className="app-button app-button--secondary app-button--sm">{queueCopy.resume}</button>}
           </div>}
           <ol className="chat-queue-list">
             {steering && <QueuedRow item={steering} badge={queueCopy.next} attachmentsLabel={queueCopy.attachments} />}
             {queue.map((item) => <QueuedRow key={item.id} item={item} attachmentsLabel={queueCopy.attachments}>
-              {onSteerQueued && <button type="button" onClick={() => onSteerQueued(item.id)} title={queueCopy.steerTitle} className="app-button app-button--ghost app-button--sm">{queueCopy.sendNow}</button>}
+              {onSteerQueued && !modelUnavailable && <button type="button" onClick={() => onSteerQueued(item.id)} title={queueCopy.steerTitle} className="app-button app-button--ghost app-button--sm">{queueCopy.sendNow}</button>}
               {onRemoveQueued && <button type="button" onClick={() => onRemoveQueued(item.id)} className="app-icon-button app-icon-button--sm app-icon-button--danger" aria-label={`${queueCopy.remove}: ${previewText(item)}`}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button>}
             </QueuedRow>)}
           </ol>
@@ -292,7 +298,7 @@ export default function ChatComposer({
         <textarea ref={resolvedTextareaRef} value={input} onChange={(event) => setInput(event.target.value)}
           onPaste={handlePaste}
           {...imeHandlers}
-          rows={2} aria-label={ct("chatMessage")} placeholder={controlsLocked ? queueCopy.placeholderBusy : disabled ? ct(loadingModel ? "startingServer" : "offline") : ct(enterToSend ? "placeholder" : "placeholderNewline")} className="app-textarea min-w-0 flex-1" />
+          rows={2} aria-label={ct("chatMessage")} placeholder={controlsLocked ? queueCopy.placeholderBusy : disabled ? (loadingModel ? queueCopy.placeholderLoading : ct("offline")) : ct(enterToSend ? "placeholder" : "placeholderNewline")} className="app-textarea min-w-0 flex-1" />
         <div className="chat-composer-toolbar">
           <div className="chat-composer-tools">
         <button type="button" data-icon="add" onClick={onAddAttachment} disabled={disabled || controlsLocked || attachmentStatus === "reading" || (documents.length >= 4 && attachments.length >= 4)} title={ct("attachFile")} className="chat-attach-button app-button app-button--secondary app-button--sm shrink-0" aria-label={ct("attachFile")}><span className="chat-attach-label">{ct("attachFile")}</span></button>
@@ -377,7 +383,7 @@ export default function ChatComposer({
         {queueModes.map((mode, index) => (
           <button key={mode} type="button" onClick={mode === 'queue' ? onQueue : onSteer}
             className={"chat-queue-button app-button app-button--sm shrink-0 " + (index === 0 ? "app-button--primary" : "app-button--secondary")}
-            title={mode === 'queue' ? queueCopy.queueTitle : queueCopy.steerTitle}>{mode === 'queue' ? queueCopy.queue : queueCopy.steer}</button>
+            title={mode === 'steer' ? queueCopy.steerTitle : waitsForLoad ? queueCopy.queueUntilLoadedTitle : queueCopy.queueTitle}>{mode === 'steer' ? queueCopy.steer : waitsForLoad ? queueCopy.queueUntilLoaded : queueCopy.queue}</button>
         ))}
         {phase !== "idle" && <button type="button" onClick={onStop} disabled={aborting} className="chat-send-button app-button app-button--sm app-button--danger shrink-0" data-icon="stop" title={ct("stop")} aria-label={ct("stop")}><span className="chat-send-label"><StableLabel value={aborting ? ct("stopping") : ct("stop")} labels={[ct("stop"), ct("stopping")]} /></span></button>}
         </div>

@@ -49,7 +49,11 @@ export function useChatPanelController({ store, preferences, onOpenModels, activ
   // conversation; `steering` goes first and interrupts whatever is running.
   const [queue, setQueue] = useState<QueuedChatMessage[]>([]);
   const [steering, setSteering] = useState<QueuedChatMessage | null>(null);
-  const [queuePaused, setQueuePaused] = useState(false);
+  // Why the queue waits for the user: a stopped or failed turn, or a model
+  // that is neither loaded nor loading.
+  const [queuePauseReason, setQueuePauseReason] = useState<'turn' | 'model' | null>(null);
+  const queuePaused = queuePauseReason !== null;
+  const setQueuePaused = (paused: boolean) => setQueuePauseReason(paused ? 'turn' : null);
   const hasQueued = queue.length > 0 || steering !== null;
   const queueCopy = chatQueueCopy[locale];
   const [copiedMessage, showCopied] = useFlashMessage(1800);
@@ -143,15 +147,18 @@ export function useChatPanelController({ store, preferences, onOpenModels, activ
   const turnReady = serverOn && chatSupported && !startingSession && !clearingWorkspace && generates && !!apiKey && !!model && !projectDocumentsLoading && !projectDocumentsError && phase === 'idle' && !pendingToolCall && !aborting && !store.busy;
   const composerReady = !incompatibleMedia && attachmentStatus !== 'reading' && (!!input.trim() || attachments.length > 0 || documents.length > 0);
   const canSend = viewingLiveThread && turnReady && composerReady;
+  const loadingModel = !serverOn && selectedStatus.state !== 'failed' && selectedStatus.state !== 'crashed' && (selectedStatus.state === 'starting' || store.busy || startingSession);
+  // No model is loaded and none is on its way, so nothing would ever start the queue.
+  const modelUnavailable = !serverOn && !loadingModel;
   // A message can wait for a reply, an approval or a model load, but not for a
-  // session that cannot chat at all: it would never leave the queue.
-  const canQueue = viewingLiveThread && !clearingWorkspace && composerReady && !chatUnavailable;
+  // session that cannot chat at all or for a model nobody is loading: it would
+  // never leave the queue.
+  const canQueue = viewingLiveThread && !clearingWorkspace && composerReady && !chatUnavailable && !modelUnavailable;
   const turnBusy = phase !== 'idle' || pendingToolCall !== null;
   const busySubmit: ChatBusySubmit = preferences?.chat.busySubmit ?? 'queue';
   const canEditMessages = viewingLiveThread && phase === 'idle' && !pendingToolCall && !toolCallInProgress && !aborting;
   const canRegenerate = viewingLiveThread && serverOn && chatSupported && !startingSession && !clearingWorkspace && generates && !!apiKey && !!model && !projectDocumentsLoading && !projectDocumentsError && phase === 'idle' && !pendingToolCall && !toolCallInProgress && !aborting && !store.busy;
   const disabled = !serverOn || !model || !apiKey;
-  const loadingModel = !serverOn && selectedStatus.state !== 'failed' && selectedStatus.state !== 'crashed' && (selectedStatus.state === 'starting' || store.busy || startingSession);
   const { isDragOver } = useNativeAttachmentDrop({ targetRef: composerDropRef, active,
     enabled: viewingLiveThread && !disabled && phase === 'idle' && pendingToolCall === null && attachmentStatus !== 'reading'
       && !(documents.length >= 4 && attachments.length >= 4),
@@ -330,8 +337,18 @@ export function useChatPanelController({ store, preferences, onOpenModels, activ
     if (error && queue.length > 0 && !steering) setQueuePaused(true);
   }, [error, queue.length, steering]);
   useEffect(() => {
-    if (!hasQueued && queuePaused) setQueuePaused(false);
+    if (!hasQueued && queuePaused) setQueuePauseReason(null);
   }, [hasQueued, queuePaused]);
+  // A model that was unloaded or failed to load stops the queue, steering
+  // message included, until a model is running and the user resumes it.
+  useEffect(() => {
+    if (!modelUnavailable || !hasQueued) return;
+    if (steering) {
+      setQueue((current) => [steering, ...current]);
+      setSteering(null);
+    }
+    if (queuePauseReason !== 'model') setQueuePauseReason('model');
+  }, [modelUnavailable, hasQueued, steering, queuePauseReason]);
 
   const dispatchRef = useRef<() => void>(() => undefined);
   dispatchRef.current = () => {
@@ -405,7 +422,7 @@ export function useChatPanelController({ store, preferences, onOpenModels, activ
     copyMessage, editUserMessage, regenerateLast, continueLast, sendMessage,
     enterToSend, onKeyDown, lastMessage, responseState, recoverable,
     queueState: {
-      queue, steering, queuePaused, canQueue, turnBusy, busySubmit,
+      queue, steering, queuePaused, queuePauseReason, modelUnavailable, canQueue, turnBusy, busySubmit,
       queueMessage: () => submitComposer('queue'), steerMessage: () => submitComposer('steer'),
       steerQueued, removeQueued, resumeQueue, stopByUser,
     },

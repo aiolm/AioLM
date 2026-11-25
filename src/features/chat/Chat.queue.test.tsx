@@ -234,8 +234,9 @@ describe("composer queue and steering", () => {
     const view = render(panel(loadingStore));
     expect(composer()).toBeEnabled();
     type("Written while loading");
-    // Nothing is running, so there is nothing to steer past: only queueing is offered.
+    // Nothing is running, so there is nothing to steer past: only waiting for the load is offered.
     expect(screen.queryByRole("button", { name: copy.steer })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: copy.queueUntilLoaded })).toBeInTheDocument();
     fireEvent.keyDown(composer(), { key: "Enter" });
     expect(screen.getByRole("region", { name: copy.queued.replace("{count}", "1") })).toHaveTextContent("Written while loading");
     expect(mocked.chatStream).not.toHaveBeenCalled();
@@ -244,6 +245,41 @@ describe("composer queue and steering", () => {
     await waitFor(() => expect(mocked.chatStream).toHaveBeenCalledTimes(1));
     expect(lastUserText(0)).toContain("Written while loading");
     await waitFor(() => expect(log().getByText("Answer after loading")).toBeInTheDocument());
+  });
+
+  it("does not queue a draft while no model is loaded or loading", () => {
+    const stoppedStore = { ...runningStore, status: { state: "stopped" } } as unknown as AppStore;
+    render(panel(stoppedStore));
+    type("Nobody is loading a model");
+    expect(composer()).toBeEnabled();
+    expect(screen.queryByRole("button", { name: copy.queue })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: copy.queueUntilLoaded })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    fireEvent.keyDown(composer(), { key: "Enter" });
+    // The draft stays put instead of disappearing into a queue that never runs.
+    expect(composer()).toHaveValue("Nobody is loading a model");
+    expect(screen.queryByRole("region", { name: /Queued messages/ })).not.toBeInTheDocument();
+  });
+
+  it("pauses the queue when the model fails to load and sends it after a reload and resume", async () => {
+    reply("Answer after reload");
+    const loadingStore = { ...runningStore, status: { state: "starting", model: cfg.active_model }, busy: true } as unknown as AppStore;
+    const failedStore = { ...runningStore, status: { state: "failed", model: cfg.active_model } } as unknown as AppStore;
+    const view = render(panel(loadingStore));
+    type("Queued before the failure");
+    fireEvent.keyDown(composer(), { key: "Enter" });
+
+    view.rerender(panel(failedStore));
+    expect(await screen.findByText(copy.pausedNoModel)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: copy.resume })).not.toBeInTheDocument();
+
+    view.rerender(panel(runningStore));
+    // A running model alone does not send it: the user decides when to resume.
+    expect(mocked.chatStream).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: copy.resume }));
+    await waitFor(() => expect(mocked.chatStream).toHaveBeenCalledTimes(1));
+    expect(lastUserText(0)).toContain("Queued before the failure");
+    await waitFor(() => expect(log().getByText("Answer after reload")).toBeInTheDocument());
   });
 
   it("returns a message whose preparation was stopped to the composer and keeps a newer draft", async () => {

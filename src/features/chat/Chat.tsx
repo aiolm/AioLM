@@ -255,6 +255,8 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
             queue={queueState.queue}
             steering={queueState.steering}
             queuePaused={queueState.queuePaused}
+            queuePauseReason={queueState.queuePauseReason}
+            modelUnavailable={queueState.modelUnavailable}
             canQueue={queueState.canQueue}
             busySubmit={queueState.busySubmit}
             onQueue={queueState.queueMessage}

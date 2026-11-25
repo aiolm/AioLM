@@ -18,6 +18,7 @@ import { projectFromConfig, setActiveProjectId, writeProjects } from "../project
 import { loadChatWorkspace, saveChatWorkspace } from "./chatHistory";
 import { createChatThread } from "./chatWorkspace";
 import type { ChatRetrySnapshot } from "../../shared/api/conversationTypes";
+import { chatQueueCopy } from "./chatQueueCopy";
 import { getTaskSnapshot, removeTask } from '../../shared/state/taskRegistry';
 
 vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
@@ -502,7 +503,7 @@ describe("ChatPanel document context warning", () => {
     expect(screen.getByRole('button', { name: 'Model & settings' })).toBeDisabled();
     // The next message can be written, and queued, while the model loads.
     expect(screen.getByRole('textbox', { name: 'Chat message' })).toBeEnabled();
-    expect(screen.getByRole('textbox', { name: 'Chat message' })).toHaveAttribute('placeholder', 'Loading model');
+    expect(screen.getByRole('textbox', { name: 'Chat message' })).toHaveAttribute('placeholder', chatQueueCopy.en.placeholderLoading);
     expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
   });
 
