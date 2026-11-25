@@ -7,7 +7,7 @@ import type { ChatHistoryMessage as Msg, ChatThread } from "../../shared/api/con
 import type { DocumentAttachment, ImageAttachment } from "../../shared/api/mediaTypes";
 import type { ModelProfile } from "../model-settings/profileEditor";
 import type { ChatMcpTool } from "./useChatMcpTools";
-import type { ChatPhase } from "./chatSendTypes";
+import type { ChatPhase, QueuedChatMessage } from "./chatSendTypes";
 import type { MediaPreprocessingOptions } from "./mediaPreprocessing";
 import type { TurnPersonalization } from "./chatPersonalization";
 import type { Locale } from "../../shared/i18n/i18nCatalog";
@@ -28,7 +28,7 @@ interface UseChatSendOptions {
   msgs: Msg[];
   setMsgs: Dispatch<SetStateAction<Msg[]>>;
   input: string;
-  setInput: (value: string) => void;
+  setInput: Dispatch<SetStateAction<string>>;
   attachments: ImageAttachment[];
   documents: DocumentAttachment[];
   setAttachments: Dispatch<SetStateAction<ImageAttachment[]>>;
@@ -42,6 +42,8 @@ interface UseChatSendOptions {
   selectedSkillIds?: string[];
   /** Clears the picker once a message carrying its selection is accepted. */
   onSkillsAccepted?: () => void;
+  /** A message taken from the composer or queue whose request was never issued. */
+  onQueuedNotSent?: (message: QueuedChatMessage) => void;
   locale?: Locale;
 }
 export type { UseChatSendOptions };

@@ -500,7 +500,8 @@ describe("ChatPanel document context warning", () => {
     expect(screen.queryByText('Open Model & settings to load a model before sending a message.')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Load model' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Model & settings' })).toBeDisabled();
-    expect(screen.getByRole('textbox', { name: 'Chat message' })).toBeDisabled();
+    // The next message can be written, and queued, while the model loads.
+    expect(screen.getByRole('textbox', { name: 'Chat message' })).toBeEnabled();
     expect(screen.getByRole('textbox', { name: 'Chat message' })).toHaveAttribute('placeholder', 'Loading model');
     expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
   });
@@ -511,7 +512,7 @@ describe("ChatPanel document context warning", () => {
     }) }));
     expect(screen.getByRole('heading', { name: 'Request failed' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Loading model' })).not.toBeInTheDocument();
-    expect(screen.getByRole('textbox', { name: 'Chat message' })).toBeDisabled();
+    expect(screen.getByRole('textbox', { name: 'Chat message' })).toBeEnabled();
     expect(screen.getByRole('textbox', { name: 'Chat message' })).toHaveAttribute('placeholder', 'No model loaded — select a model and load it');
     // The failure is read where it is shown; there is no separate diagnostics page.
     expect(screen.getByText('Synthetic startup failure')).toBeVisible();
@@ -808,14 +809,16 @@ describe("ChatPanel document context warning", () => {
     expect(defined(loadChatWorkspace().threads[0]).title).toBe(title);
   });
 
-  it("locks the composer while preparing a request and lets Stop cancel before generation", async () => {
+  it("frees the composer while preparing a request and lets Stop cancel before generation", async () => {
     let release!: () => void;
     mocked.serverActivity.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
     renderPanel();
     await sendMessage("Keep this draft when preparation is cancelled.");
 
+    // The sent draft leaves the composer at once, so Enter cannot send it twice.
     const composer = screen.getByLabelText("Chat message");
-    expect(composer).toBeDisabled();
+    expect(composer).toBeEnabled();
+    expect(composer).toHaveValue("");
     expect(screen.getByLabelText("Loaded sessions")).toBeDisabled();
     fireEvent.keyDown(composer, { key: "Enter" });
     expect(mocked.serverActivity).toHaveBeenCalledTimes(1);

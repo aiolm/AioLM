@@ -4,13 +4,18 @@ import type { Locale } from "../i18n/i18nCatalog";
 export type ChatLineSpacing = "compact" | "normal" | "relaxed";
 export type AppFontFamily = "default" | "system" | "serif";
 export type CodeFontFamily = "default" | "system";
+/**
+ * What submitting a message does while a reply is still running or awaiting
+ * MCP approval: wait in the queue, or stop that reply and send at once.
+ */
+export type ChatBusySubmit = "queue" | "steer";
 /** Which finished tasks may raise an operating-system notification. */
 export interface NotificationPreferences { chat: boolean; downloads: boolean; benchmark: boolean }
 
 export interface AppPreferences {
   locale: Locale;
   theme: ThemeMode;
-  chat: { enterToSend: boolean; streamResponses: boolean; compactMessages: boolean; lineSpacing: ChatLineSpacing };
+  chat: { enterToSend: boolean; streamResponses: boolean; compactMessages: boolean; expandReasoning: boolean; lineSpacing: ChatLineSpacing; busySubmit: ChatBusySubmit };
   server: { autoStart: boolean };
   appearance: { reduceMotion: boolean; density: "comfortable" | "compact"; fontFamily: AppFontFamily; codeFontFamily: CodeFontFamily };
   advanced: { confirmDestructiveActions: boolean };
@@ -23,7 +28,8 @@ const KEY = "aiolm-preferences";
 
 export const defaultPreferences = (): AppPreferences => ({
   locale: "en", theme: "system",
-  chat: { enterToSend: true, streamResponses: true, compactMessages: false, lineSpacing: "normal" },
+  // Queueing never interrupts a reply the user did not explicitly stop.
+  chat: { enterToSend: true, streamResponses: true, compactMessages: false, expandReasoning: false, lineSpacing: "normal", busySubmit: "queue" },
   server: { autoStart: false },
   // "default" keeps the bundled typography the app shipped with.
   appearance: { reduceMotion: false, density: "comfortable", fontFamily: "default", codeFontFamily: "default" },
@@ -55,7 +61,7 @@ export function validatePreferences(input: Partial<AppPreferences> | null | unde
     // Retired settings from older saves or imports (timestamps, the frontend
     // unload hook, the status polling interval, developer mode) are dropped so
     // they cannot ride along into state or future exports.
-    chat: withoutRetired({ ...d.chat, ...(p.chat ?? {}), enterToSend: Boolean(p.chat?.enterToSend ?? d.chat.enterToSend), streamResponses: Boolean(p.chat?.streamResponses ?? d.chat.streamResponses), compactMessages: Boolean(p.chat?.compactMessages ?? d.chat.compactMessages), lineSpacing: oneOf(["compact", "normal", "relaxed"], p.chat?.lineSpacing, d.chat.lineSpacing) }, "showTimestamps"),
+    chat: withoutRetired({ ...d.chat, ...(p.chat ?? {}), enterToSend: Boolean(p.chat?.enterToSend ?? d.chat.enterToSend), streamResponses: Boolean(p.chat?.streamResponses ?? d.chat.streamResponses), compactMessages: Boolean(p.chat?.compactMessages ?? d.chat.compactMessages), expandReasoning: strictBool(p.chat?.expandReasoning, d.chat.expandReasoning), lineSpacing: oneOf(["compact", "normal", "relaxed"], p.chat?.lineSpacing, d.chat.lineSpacing), busySubmit: oneOf(["queue", "steer"], p.chat?.busySubmit, d.chat.busySubmit) }, "showTimestamps"),
     server: withoutRetired({ ...d.server, ...(p.server ?? {}), autoStart: Boolean(p.server?.autoStart ?? d.server.autoStart) }, "autoStopOnExit", "pollIntervalMs"),
     appearance: { ...d.appearance, ...(p.appearance ?? {}), reduceMotion: Boolean(p.appearance?.reduceMotion ?? d.appearance.reduceMotion), density: p.appearance?.density === "compact" ? "compact" : "comfortable", fontFamily: oneOf(["default", "system", "serif"], p.appearance?.fontFamily, d.appearance.fontFamily), codeFontFamily: oneOf(["default", "system"], p.appearance?.codeFontFamily, d.appearance.codeFontFamily) },
     advanced: withoutRetired({ ...d.advanced, ...(p.advanced ?? {}), confirmDestructiveActions: Boolean(p.advanced?.confirmDestructiveActions ?? d.advanced.confirmDestructiveActions) }, "developerMode"),

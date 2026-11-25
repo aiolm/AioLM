@@ -87,6 +87,23 @@ describe("typography preferences", () => {
     expect(update).toHaveBeenLastCalledWith({ chat: { ...defaultPreferences().chat, lineSpacing: "compact" } });
   });
 
+  it("patches automatic expansion of the model's thinking", () => {
+    const update = mount();
+    fireEvent.click(screen.getByRole("tab", { name: "Chat" }));
+    const toggle = screen.getByRole("switch", { name: "Expand thinking automatically" });
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    expect(update).toHaveBeenLastCalledWith({ chat: { ...defaultPreferences().chat, expandReasoning: true } });
+  });
+
+  it("patches what sending does while a reply is running", () => {
+    const update = mount();
+    fireEvent.click(screen.getByRole("tab", { name: "Chat" }));
+    expect(screen.getByRole("combobox", { name: "While a reply is running" })).toHaveTextContent("Queue the message");
+    choose("While a reply is running", "Stop the reply and send now");
+    expect(update).toHaveBeenLastCalledWith({ chat: { ...defaultPreferences().chat, busySubmit: "steer" } });
+  });
+
   it("resets typography through the existing appearance and chat resets", () => {
     const update = mount();
     fireEvent.click(screen.getByRole("tab", { name: "Advanced" }));

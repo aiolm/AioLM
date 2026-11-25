@@ -23,6 +23,8 @@ interface MessageBubbleProps {
   phase: ChatPhase;
   copied: boolean;
   compact: boolean;
+  /** Reasoning starts open; the reader can still fold it away. */
+  expandReasoning?: boolean;
   locale: Locale;
   onCopy: (index: number, text: string) => void;
   onEditMessage?: (index: number) => void;
@@ -43,7 +45,7 @@ interface MessageBubbleProps {
 // verify the memoization contract itself, by re-wrapping this in `memo()` and
 // spying on calls — see MessageBubble.perf.test.tsx.
 export function MessageBubble({
-  message, index, isLast, stream, phase, copied, compact, locale, onCopy,
+  message, index, isLast, stream, phase, copied, compact, expandReasoning = false, locale, onCopy,
   onEditMessage, editDisabled = false, onRegenerate, onContinue, regenerateDisabled = false,
 }: MessageBubbleProps) {
   const text = (key: ChatTextKey) => translate(locale, `chat.${key}`);
@@ -59,7 +61,9 @@ export function MessageBubble({
       <div className={`chat-message ${compact ? "chat-message-compact " : ""}${isUser ? "chat-message-user" : "chat-message-assistant"}`}>
         <div className="min-w-0">
         {message.role === "assistant" && message.reasoning && (
-          <details className="chat-reasoning mb-2.5 app-card app-card--muted app-card--tight text-xs leading-relaxed ui-color-muted">
+          // React applies `open` only when the setting changes, so a block the
+          // reader folded or unfolded stays that way through streaming updates.
+          <details open={expandReasoning} className="chat-reasoning mb-2.5 app-card app-card--muted app-card--tight text-xs leading-relaxed ui-color-muted">
             <summary className="cursor-pointer select-none font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ui-focus)] ui-color-faint" >{text("thinking")}</summary>
             {/* The body collapses on click too, so a long trace can be put away
                 from wherever the reader's eye already is. Copying text out of it

@@ -251,6 +251,9 @@ export function useChatThreads({ phase, hasPendingTurn, requireIdle, onSwitchThr
 
   return {
     workspace, setWorkspace, activeThread, liveThread, msgsThreadId, msgs, setMsgs, viewMessages, viewingLiveThread, clearingWorkspace,
+    // A finished turn's messages are still on their way into the workspace.
+    // A turn started now would rebuild its history from the older copy.
+    writeBackPending: buffer !== null && phase === 'idle',
     saveFailed, retrySave: () => setSaveAttempt(attempt => attempt + 1),
     threadQuery, setThreadQuery, threadPanelOpen, setThreadPanelOpen,
     pendingDelete, setPendingDelete, visibleThreads,

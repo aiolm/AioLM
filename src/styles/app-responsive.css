@@ -64,7 +64,7 @@
 @container conversation (min-width: 840px) {
  .chat-composer-toolbar { grid-template-columns: auto minmax(0,1fr) auto; align-items: center; }
  .chat-composer-status { grid-column: 2; grid-row: 1; text-align: end; }
- .chat-composer-toolbar > button { grid-column: 3; }
+ .chat-composer-toolbar > .chat-send-actions { grid-column: 3; }
 }
 /* Stack the whole control group, never the picker and settings independently. */
 @container conversation (max-width: 519px) {

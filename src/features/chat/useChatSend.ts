@@ -7,7 +7,7 @@ import { chatRetrySnapshot } from "./chatRetrySnapshot";
 import type { ChatHistoryMessage, ChatWorkspaceClearDetail } from "../../shared/api/conversationTypes";
 import { retryTools } from "./chatRetryTools";
 import { appliedProfile, requestProfileFromApplication } from "../model-settings/profileEditor";
-import type { FailedRequest } from "./chatSendTypes";
+import type { FailedRequest, QueuedChatMessage } from "./chatSendTypes";
 import { createStreamDeltaHandler, resolveDetectedToolCall, sameDocuments, sameImages } from "./chatSendHelpers";
 import { setSessionActivity } from "../../shared/state/sessionActivity";
 import { notifyCompletion } from "../../shared/lib/notifications";
@@ -39,7 +39,7 @@ export function useChatSend({
   store, effectiveConfig, modelProfile, engine, embeddingTarget, mediaPreprocessing, sessionId = "default", preferences, baseUrl, apiKey, model, activeThread, msgs, setMsgs,
   input, setInput, attachments, documents, setAttachments, setDocuments,
   mcpEntryByFunctionName, mcpDefinitions, atBottomRef, phase, setPhase,
-  selectedSkillIds = [], onSkillsAccepted, locale = "en",
+  selectedSkillIds = [], onSkillsAccepted, onQueuedNotSent, locale = "en",
 }: UseChatSendOptions) {
   const pt = (key: ChatPersonalizationTextKey, vars?: Record<string, string | number>) => chatPersonalizationText(locale, key, vars);
   const [error, setError] = useState<string | null>(null);
@@ -147,14 +147,20 @@ export function useChatSend({
     canSend = true,
     regenerate = false,
     textOverride,
+    queued,
   }: {
     retry?: boolean;
     historyOverride?: api.ChatMessage[];
     canSend?: boolean;
     regenerate?: boolean;
     textOverride?: string;
+    /** A message already taken out of the composer; the composer is left alone. */
+    queued?: QueuedChatMessage;
   }) => {
-    if (isChatWorkspaceClearing() || ctrlRef.current || (!historyOverride && (!baseUrl || pendingToolCall))) return;
+    if (isChatWorkspaceClearing() || ctrlRef.current || (!historyOverride && (!baseUrl || pendingToolCall))) {
+      if (queued) onQueuedNotSent?.(queued);
+      return;
+    }
     const generation = turnGeneration.current;
     const isCurrent = () => generation === turnGeneration.current;
     const toolFollowup = !!historyOverride;
@@ -171,24 +177,32 @@ export function useChatSend({
     }));
     const text = toolFollowup
       ? ""
-      : textOverride !== undefined
+      : queued
+        ? queued.text.trim()
+        : textOverride !== undefined
         ? textOverride.trim()
         : regenerate && regeneratingUser
           ? regeneratingUser.content.trim()
           : (retry ? failed?.text ?? "" : input).trim();
     let images = toolFollowup
       ? []
-      : textOverride !== undefined
+      : queued
+        ? queued.images
+        : textOverride !== undefined
         ? []
         : regenerate && regeneratingUser
           ? (regeneratingUser.images ?? [])
           : (retry ? failed?.images ?? [] : attachments);
     if (!toolFollowup && engine && images.some(image => !canPrepareAttachment(image, engine.modalities, mediaPreprocessing ?? { videoFrames: false }))) {
-      setError(translate(locale, "chat.unsupportedAttachment")); return;
+      setError(translate(locale, "chat.unsupportedAttachment"));
+      if (queued) onQueuedNotSent?.(queued);
+      return;
     }
     const pendingDocuments = toolFollowup
       ? []
-      : textOverride !== undefined
+      : queued
+        ? queued.documents
+        : textOverride !== undefined
         ? []
         : regenerate && regeneratingUser
           ? (regeneratingUser.documents ?? [])
@@ -237,7 +251,12 @@ export function useChatSend({
     let assistantAppended = false;
     let replacedReply: Msg | undefined;
     let skillFollowup: api.ChatMessage[] | null = null;
-    const skillIds = textOverride !== undefined || regenerate ? [] : selectedSkillIds.slice();
+    const skillIds = queued ? queued.skillIds.slice() : textOverride !== undefined || regenerate ? [] : selectedSkillIds.slice();
+    // The composer stays editable during preparation. Clear only what this send
+    // took from it, never a next message typed in the meantime.
+    const sentInput = input;
+    const sentAttachments = attachments;
+    const sentDocuments = documents;
     try {
       if (!activityRef.current) {
         const activity = { sessionId: turn.sessionId, started: false };
@@ -272,11 +291,11 @@ export function useChatSend({
         : { text, images, documents: pendingDocuments, history: bounded.messages, personalization: turn.personalization, tools: retryTools(turn.tools, turn.toolEntries) };
       // Saved with the reply so Retry survives a restart or thread switch.
       const retrySnapshot = chatRetrySnapshot(failedRef.current, hasPersonalization(turn.personalization));
-      if (!retry && !toolFollowup && !regenerate && textOverride === undefined) {
-        setInput("");
+      if (!retry && !toolFollowup && !regenerate && textOverride === undefined && !queued) {
+        setInput(current => current === sentInput ? "" : current);
         onSkillsAccepted?.();
-        setAttachments([]);
-        setDocuments([]);
+        setAttachments(current => current === sentAttachments ? [] : current);
+        setDocuments(current => current === sentDocuments ? [] : current);
       }
       atBottomRef.current = true;
       setMsgs((current) => {
@@ -374,6 +393,9 @@ export function useChatSend({
       if (!controller.signal.aborted && streamRef.current.finishReason !== 'length') void notifyCompletion("chat");
     } catch (caught) {
       if (!isCurrent()) return;
+      // Stopped or failed before the request went out: nothing reached the
+      // conversation, so the message goes back to the user instead of vanishing.
+      if (queued && !assistantAppended) onQueuedNotSent?.(queued);
       const isAbort = controller.signal.aborted || isIpcErrorKind(caught, "cancelled") || (caught instanceof DOMException && caught.name === "AbortError");
       cancelScheduledRender();
       const responseMetrics = snapshotMetrics();
@@ -422,6 +444,7 @@ export function useChatSend({
 
   const send = (retry = false, historyOverride?: api.ChatMessage[], canSend = true) =>
     executeSend({ retry, historyOverride, canSend });
+  const sendQueued = (queued: QueuedChatMessage) => executeSend({ queued });
   const regenerate = () => executeSend({ regenerate: true });
   const continueResponse = () => {
     const last = msgs.at(-1);
@@ -437,6 +460,6 @@ export function useChatSend({
   return {
     error, setError, contextWarning, contextSources,
     aborting, pendingToolCall, toolCallInProgress, streamingDraftStore, failedRef, canRetry, retryUnavailable, retryToolsMissing,
-    send, regenerate, continueResponse, approvePendingTool, rejectPendingTool, stop, resetChatState,
+    send, sendQueued, regenerate, continueResponse, approvePendingTool, rejectPendingTool, stop, resetChatState,
   };
 }

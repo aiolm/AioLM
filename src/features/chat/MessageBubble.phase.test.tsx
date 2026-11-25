@@ -52,3 +52,24 @@ it('keeps reasoning selectable and offers its collapse action as a native button
   fireEvent.click(collapse);
   expect(details.open).toBe(false);
 });
+
+it('opens reasoning automatically when the setting is on, from the first streamed reasoning, and keeps the reader\'s choice', () => {
+  const props = { index: 0, isLast: true, copied: false, compact: false, locale: 'en' as const, onCopy: vi.fn() };
+  const streaming: ChatHistoryMessage = { role: 'assistant', content: '', reasoning: 'First step.' };
+  const view = render(<MessageBubble {...props} message={streaming} phase="decoding" expandReasoning />);
+  const details = view.container.querySelector('details')!;
+  expect(details).toHaveAttribute('open');
+  expect(screen.getByText('First step.')).toBeVisible();
+
+  // Folding it by hand survives the rest of the stream.
+  details.open = false;
+  view.rerender(<MessageBubble {...props} message={{ ...streaming, reasoning: 'First step. Second step.' }} phase="decoding" expandReasoning />);
+  expect(details).not.toHaveAttribute('open');
+
+  // Turning the setting off collapses it; the default stays collapsed.
+  view.rerender(<MessageBubble {...props} message={{ ...streaming, content: 'Answer', finishReason: 'stop' }} phase="idle" expandReasoning={false} />);
+  expect(details).not.toHaveAttribute('open');
+  view.unmount();
+  const fresh = render(<MessageBubble {...props} message={{ ...streaming, content: 'Answer' }} phase="idle" />);
+  expect(fresh.container.querySelector('details')).not.toHaveAttribute('open');
+});

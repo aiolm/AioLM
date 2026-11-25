@@ -319,7 +319,7 @@ a.tuning-default-note:hover { text-decoration-thickness: 2px; }
 .chat-composer-actions textarea { min-height: 72px; max-height: 160px; font-size: 15px; resize: none; overflow-y: auto; }
 .chat-composer-toolbar { position: relative; display: grid; min-width: 0; grid-template-columns: minmax(0,1fr) auto; align-items: start; gap: 8px; }
 .chat-composer-tools { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 8px; }
-.chat-composer-toolbar > button { grid-column: 2; grid-row: 1; }
+.chat-composer-toolbar > .chat-send-actions { grid-column: 2; grid-row: 1; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; min-width: 0; }
 .chat-composer-status { grid-column: 1 / -1; grid-row: 2; min-inline-size: 0; text-align: start; overflow-wrap: break-word; }
 .chat-tool-strip { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 8px; }
 .chat-mcp-tools { position: static; flex-shrink: 0; }
@@ -365,6 +365,13 @@ a.tuning-default-note:hover { text-decoration-thickness: 2px; }
 .chat-answer-model { display: inline-flex; align-items: center; gap: 6px; }
 .chat-answer-model > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .chat-answer-model .model-family-icon { flex-shrink: 0; width: 16px; height: 16px; margin: 0; }
+/* Messages written ahead of the conversation; capped so the draft stays in view. */
+.chat-queue { display: grid; gap: 6px; min-width: 0; max-height: min(132px,24dvh); overflow: auto; padding: 8px 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); background: var(--ui-surface); }
+.chat-queue-paused { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.chat-queue-list { display: grid; gap: 4px; min-width: 0; margin: 0; padding: 0; list-style: none; }
+.chat-queue-item { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--ui-text-support); color: var(--ui-muted); }
+.chat-queue-text { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ui-ink); }
+.chat-queue-meta { flex-shrink: 0; }
 .chat-composer-context { min-width: 0; max-height: min(112px,20dvh); overflow: auto; padding: 8px 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); background: var(--ui-surface); }
 .chat-composer-context .chat-attachment-status-slot:empty { display: none; }
 .chat-composer-context > .chat-attachment-status-slot:empty + div { margin-top: 0; }

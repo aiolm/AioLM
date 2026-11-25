@@ -10,7 +10,7 @@ import { getLaunchAtLogin, isNativeRuntimeAvailable, setLaunchAtLogin } from "..
 import { localeOptions, useI18n } from "../../shared/i18n/i18n";
 import { clearChatWorkspace } from "../chat/chatHistory";
 import { clearDocumentIndex } from "../chat/documentIndex";
-import { defaultPreferences, exportPreferences, importPreferences, type AppFontFamily, type AppPreferences, type ChatLineSpacing, type CodeFontFamily, type NotificationPreferences } from "../../shared/config/preferences";
+import { defaultPreferences, exportPreferences, importPreferences, type AppFontFamily, type AppPreferences, type ChatBusySubmit, type ChatLineSpacing, type CodeFontFamily, type NotificationPreferences } from "../../shared/config/preferences";
 import { appFontFamilyValue, chatLineHeights, codeFontFamilyValue } from "../../shared/config/typography";
 import { preferenceText } from "../../shared/i18n/preferenceText";
 import { getNotificationPermission, requestNotificationPermission, sendTestNotification, type NotificationPermission } from "../../shared/lib/notifications";
@@ -246,7 +246,7 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
     }
     setConfirmReset(false);
   };
-  const toggle = (key: "enterToSend" | "streamResponses" | "compactMessages", value: boolean) => patch({ chat: { ...preferences.chat, [key]: value } });
+  const toggle = (key: "enterToSend" | "streamResponses" | "compactMessages" | "expandReasoning", value: boolean) => patch({ chat: { ...preferences.chat, [key]: value } });
   const bool = (id: string, checked: boolean, onChange: (value: boolean) => void) => <Switch id={id} {...settingAria(id)} checked={checked} onChange={onChange} />;
   const downloadExport = () => {
     const blob = new Blob([exportPreferences(preferences)], { type: "application/json" });
@@ -317,8 +317,12 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
         </Group>}
         {(normalizedQuery || section === "chat") && <Group id="chat" title={t("settings.chat")}>
           <Row id="settings-enter-to-send" label={t("settings.enterToSend")} description={t("settings.enterToSendDesc")}>{bool("settings-enter-to-send", preferences.chat.enterToSend, (value) => toggle("enterToSend", value))}</Row>
-          <Row id="settings-stream" label={t("settings.stream")} description={t("settings.streamDesc")}>{bool("settings-stream", preferences.chat.streamResponses, (value) => toggle("streamResponses", value))}</Row>
+          <Row id="settings-chat-busy-submit" label={prefCopy.busySubmit} description={prefCopy.busySubmitDesc}>
+            <CustomSelect<ChatBusySubmit> id="settings-chat-busy-submit" {...settingAria("settings-chat-busy-submit")} value={preferences.chat.busySubmit} options={[{ value: "queue", label: prefCopy.busySubmitQueue }, { value: "steer", label: prefCopy.busySubmitSteer }]} onChange={(busySubmit) => patch({ chat: { ...preferences.chat, busySubmit } })} triggerClassName="settings-select" />
+          </Row>
+          <Row id="settings-stream"label={t("settings.stream")} description={t("settings.streamDesc")}>{bool("settings-stream", preferences.chat.streamResponses, (value) => toggle("streamResponses", value))}</Row>
           <Row id="settings-compact-messages" label={t("settings.compactMessages")} description={t("settings.compactMessagesDesc")}>{bool("settings-compact-messages", preferences.chat.compactMessages, (value) => toggle("compactMessages", value))}</Row>
+          <Row id="settings-expand-reasoning" label={prefCopy.expandReasoning} description={prefCopy.expandReasoningDesc}>{bool("settings-expand-reasoning", preferences.chat.expandReasoning, (value) => toggle("expandReasoning", value))}</Row>
           <Row id="settings-chat-line-spacing" label={prefCopy.lineSpacing} description={prefCopy.lineSpacingDesc}>
             <CustomSelect<ChatLineSpacing> id="settings-chat-line-spacing" {...settingAria("settings-chat-line-spacing")} value={preferences.chat.lineSpacing} options={[{ value: "compact", label: prefCopy.lineSpacingCompact }, { value: "normal", label: prefCopy.lineSpacingNormal }, { value: "relaxed", label: prefCopy.lineSpacingRelaxed }]} onChange={(lineSpacing) => patch({ chat: { ...preferences.chat, lineSpacing } })} triggerClassName="settings-select" />
           </Row>

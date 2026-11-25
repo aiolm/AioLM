@@ -9,6 +9,8 @@ export interface PreferenceCopy {
   lineSpacing: string; lineSpacingDesc: string;
   lineSpacingCompact: string; lineSpacingNormal: string; lineSpacingRelaxed: string;
   lineSpacingPreview: string; lineSpacingPreviewText: string;
+  busySubmit: string; busySubmitDesc: string; busySubmitQueue: string; busySubmitSteer: string;
+  expandReasoning: string; expandReasoningDesc: string;
   notifications: string;
   permission: string; permissionDesc: string;
   statusChecking: string; statusGranted: string; statusDenied: string; statusDefault: string; statusUnavailable: string;
@@ -30,6 +32,9 @@ export const preferenceText: Record<Locale, PreferenceCopy> = {
     lineSpacing: "Chat line spacing", lineSpacingDesc: "Space between lines in messages and reasoning. Code keeps its layout.",
     lineSpacingCompact: "Compact", lineSpacingNormal: "Normal", lineSpacingRelaxed: "Relaxed",
     lineSpacingPreview: "Line spacing preview", lineSpacingPreviewText: "Local models answer here. Longer replies wrap across several lines, so the spacing between them decides how dense a conversation reads.",
+    busySubmit: "While a reply is running", busySubmitDesc: "What Enter does when you send another message before the current reply finishes. The other choice stays available as a button and with Alt+Enter.",
+    busySubmitQueue: "Queue the message", busySubmitSteer: "Stop the reply and send now",
+    expandReasoning: "Expand thinking automatically", expandReasoningDesc: "Show the model's thinking open in every reply, including while it is being generated. You can still collapse each one.",
     notifications: "Notifications",
     permission: "System notifications", permissionDesc: "The status shows whether AioLM can submit notification requests. Your system may ask for permission on the first notification, including a test, and controls whether alerts appear.",
     statusChecking: "Checking…", statusGranted: "Ready to send", statusDenied: "Blocked", statusDefault: "Not allowed yet", statusUnavailable: "Unavailable",
@@ -54,6 +59,9 @@ export const preferenceText: Record<Locale, PreferenceCopy> = {
     lineSpacing: "채팅 줄 간격", lineSpacingDesc: "메시지와 추론 과정의 줄 사이 간격입니다. 코드는 원래 배치를 유지합니다.",
     lineSpacingCompact: "좁게", lineSpacingNormal: "보통", lineSpacingRelaxed: "넓게",
     lineSpacingPreview: "줄 간격 미리보기", lineSpacingPreviewText: "로컬 모델의 답변이 여기에 표시됩니다. 긴 답변은 여러 줄로 이어지므로 줄 간격에 따라 대화가 읽히는 밀도가 달라집니다.",
+    busySubmit: "응답 생성 중 전송", busySubmitDesc: "현재 응답이 끝나기 전에 다음 메시지를 보낼 때 Enter가 하는 동작입니다. 다른 동작도 버튼과 Alt+Enter로 언제든 선택할 수 있습니다.",
+    busySubmitQueue: "대기열에 추가", busySubmitSteer: "응답을 중지하고 즉시 전송",
+    expandReasoning: "생각 과정 자동 펼치기", expandReasoningDesc: "생성 중인 응답을 포함해 모든 응답의 생각 과정을 펼친 상태로 보여 줍니다. 각 항목은 직접 접을 수 있습니다.",
     notifications: "알림",
     permission: "시스템 알림", permissionDesc: "이 상태는 AioLM이 알림 전송을 요청할 수 있는지를 나타냅니다. 시스템이 테스트를 포함한 첫 알림에서 권한을 물을 수 있으며, 실제 표시 여부는 시스템 알림 설정에서 결정됩니다.",
     statusChecking: "확인 중…", statusGranted: "전송 가능", statusDenied: "차단됨", statusDefault: "아직 허용 안 됨", statusUnavailable: "사용할 수 없음",
@@ -78,6 +86,9 @@ export const preferenceText: Record<Locale, PreferenceCopy> = {
     lineSpacing: "チャットの行間", lineSpacingDesc: "メッセージと推論の行の間隔です。コードは元のレイアウトを保ちます。",
     lineSpacingCompact: "狭い", lineSpacingNormal: "標準", lineSpacingRelaxed: "広い",
     lineSpacingPreview: "行間のプレビュー", lineSpacingPreviewText: "ローカルモデルの回答はここに表示されます。長い回答は複数行にわたるため、行間によって会話の読みやすさが変わります。",
+    busySubmit: "応答の生成中に送信", busySubmitDesc: "現在の応答が終わる前に次のメッセージを送るときの Enter の動作です。もう一方の動作もボタンと Alt+Enter でいつでも選べます。",
+    busySubmitQueue: "キューに追加", busySubmitSteer: "応答を停止して今すぐ送信",
+    expandReasoning: "思考過程を自動で展開", expandReasoningDesc: "生成中の応答を含め、すべての応答の思考過程を開いた状態で表示します。個別に折りたたむこともできます。",
     notifications: "通知",
     permission: "システム通知", permissionDesc: "この状態は、AioLMが通知の送信を依頼できるかを示します。テストを含む最初の通知でシステムが許可を求める場合があり、表示されるかどうかはシステムの通知設定で決まります。",
     statusChecking: "確認中…", statusGranted: "送信可能", statusDenied: "ブロック中", statusDefault: "未許可", statusUnavailable: "利用不可",
@@ -102,6 +113,9 @@ export const preferenceText: Record<Locale, PreferenceCopy> = {
     lineSpacing: "聊天行距", lineSpacingDesc: "消息和推理过程的行间距。代码保持原有排版。",
     lineSpacingCompact: "紧凑", lineSpacingNormal: "标准", lineSpacingRelaxed: "宽松",
     lineSpacingPreview: "行距预览", lineSpacingPreviewText: "本地模型的回答显示在这里。较长的回答会跨越多行，行距决定了对话读起来的疏密。",
+    busySubmit: "回复生成期间发送", busySubmitDesc: "在当前回复结束前发送下一条消息时 Enter 的行为。另一种行为也可随时通过按钮和 Alt+Enter 选择。",
+    busySubmitQueue: "加入队列", busySubmitSteer: "停止回复并立即发送",
+    expandReasoning: "自动展开思考过程", expandReasoningDesc: "以展开状态显示所有回复（包括正在生成的回复）的思考过程。仍可单独折叠每一项。",
     notifications: "通知",
     permission: "系统通知", permissionDesc: "此状态表示 AioLM 是否可以提交通知请求。系统可能在首次通知（包括测试通知）时请求权限，是否显示提醒由系统通知设置决定。",
     statusChecking: "正在检查…", statusGranted: "可发送", statusDenied: "已阻止", statusDefault: "尚未允许", statusUnavailable: "不可用",

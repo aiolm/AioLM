@@ -42,7 +42,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
     msgsThreadId,
     turn: {
       contextWarning, contextSources, aborting, pendingToolCall, toolCallInProgress, streamingDraftStore,
-      canRetry, retryUnavailable, setError, send, approvePendingTool, rejectPendingTool, stop,
+      canRetry, retryUnavailable, setError, send, approvePendingTool, rejectPendingTool,
     },
     project: {
       projectName: activeProjectName, documentsLoading: projectDocumentsLoading,
@@ -53,7 +53,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
     visiblePhase, visibleError, uiError, setUiError, ownerTitle, requireIdle, incompatibleMedia, chatSupported, generates,
     chatUnavailable, canSend, canEditMessages, canRegenerate, disabled, loadingModel, closeThreadPanel, startNewThread,
     copyMessage, editUserMessage, regenerateLast, continueLast, sendMessage,
-    enterToSend, onKeyDown, lastMessage, responseState, recoverable,
+    enterToSend, onKeyDown, lastMessage, responseState, recoverable, queueState,
   } = useChatPanelController({ store, preferences, onOpenModels, active });
   const embeddingCopy = embeddingTargetCopy[locale];
   const mediaCopy = mediaPreparationCopy[locale];
@@ -158,6 +158,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
             phase={visiblePhase}
             copiedIndex={copied}
             compactMessages={preferences?.chat.compactMessages ?? false}
+            expandReasoning={preferences?.chat.expandReasoning ?? false}
             locale={locale}
             onCopy={copyMessage}
             onEditMessage={viewingLiveThread ? editUserMessage : undefined}
@@ -232,7 +233,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
             phase={phase}
             loadingModel={loadingModel}
             onAddAttachment={() => void addAttachment()}
-            onStop={stop}
+            onStop={queueState.stopByUser}
             aborting={aborting}
             onSend={sendMessage}
             canSend={canSend}
@@ -247,6 +248,16 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
             skillsLocked={phase !== "idle" || pendingToolCall !== null}
             selectedSkillsLabel={pt("selectedSkills")}
             removeSkillLabel={pt("removeSkill")}
+            queue={queueState.queue}
+            steering={queueState.steering}
+            queuePaused={queueState.queuePaused}
+            canQueue={queueState.canQueue}
+            busySubmit={queueState.busySubmit}
+            onQueue={queueState.queueMessage}
+            onSteer={queueState.steerMessage}
+            onSteerQueued={queueState.steerQueued}
+            onRemoveQueued={queueState.removeQueued}
+            onResumeQueue={queueState.resumeQueue}
           />}
         </div>
       </div>

@@ -144,7 +144,7 @@ it.each(['approve', 'reject'] as const)('keeps a pending tool turn with its conv
   fireEvent.click(screen.getByRole('button', { name: `Return to ${thread.title}` }));
   expect(screen.getByRole('heading', { name: thread.title })).toBeInTheDocument();
   expect(log.getByText(chatText.en.stopCurrentResponseFirst)).toBeInTheDocument();
-  expect(screen.getByRole('textbox', { name: 'Chat message' })).toBeDisabled();
+  expect(screen.getByRole('textbox', { name: 'Chat message' })).toBeEnabled();
   expect(screen.getByRole('textbox', { name: 'Chat message' })).toHaveValue('Unsent owner follow-up');
   if (decision === 'approve') {
     // The application's ES2020 library does not expose Promise.withResolvers.

@@ -12,7 +12,9 @@ import { useChatAttachments } from './useChatAttachments';
 import { useNativeAttachmentDrop } from './useNativeAttachmentDrop';
 import { useChatMcpTools } from './useChatMcpTools';
 import { useChatSend } from './useChatSend';
-import type { ChatPhase } from './chatSendTypes';
+import type { ChatPhase, QueuedChatMessage } from './chatSendTypes';
+import type { ChatBusySubmit } from '../../shared/config/preferences';
+import { chatQueueCopy } from './chatQueueCopy';
 import { titleFromMessage } from './chatWorkspace';
 import { unfinishedReply } from './chatRetrySnapshot';
 import { useChatSkills } from './useChatSkills';
@@ -43,6 +45,13 @@ export function useChatPanelController({ store, preferences, onOpenModels, activ
   const [input, setInput] = useState('');
   const [composerRevision, setComposerRevision] = useState(0);
   const [uiError, setUiError] = useState<string | null>(null);
+  // Messages written while a turn could not start yet. They belong to the live
+  // conversation; `steering` goes first and interrupts whatever is running.
+  const [queue, setQueue] = useState<QueuedChatMessage[]>([]);
+  const [steering, setSteering] = useState<QueuedChatMessage | null>(null);
+  const [queuePaused, setQueuePaused] = useState(false);
+  const hasQueued = queue.length > 0 || steering !== null;
+  const queueCopy = chatQueueCopy[locale];
   const [copiedMessage, showCopied] = useFlashMessage(1800);
   const copied = copiedMessage === null ? null : Number(copiedMessage);
   const session = useChatSession({ store, active, modelSettings, t, locale });
@@ -64,7 +73,12 @@ export function useChatPanelController({ store, preferences, onOpenModels, activ
   const skills = useChatSkills();
 
   const requireIdle = () => {
-    if (phase === 'idle' && !pendingToolCall) return true;
+    if (phase === 'idle' && !pendingToolCall && !hasQueued) return true;
+    if (phase === 'idle' && !pendingToolCall) {
+      // Not a turn failure: it must not pause the queue it is asking about.
+      setUiError(queueCopy.clearQueueFirst);
+      return false;
+    }
     const message = ct('stopCurrentResponseFirst');
     if (viewingLiveThreadRef.current) setError(message);
     else setUiError(message);
@@ -76,14 +90,17 @@ export function useChatPanelController({ store, preferences, onOpenModels, activ
     setInput('');
     clearComposerAttachments();
     skills.clearSelectedSkills();
+    setQueue([]);
+    setSteering(null);
+    setQueuePaused(false);
     resetChatState();
     setComposerRevision((revision) => revision + 1);
   };
 
-  const threads = useChatThreads({ phase, hasPendingTurn: () => pendingToolCall !== null, requireIdle, onSwitchThread: resetComposer, defaultThreadTitle: ct('newConversation') });
+  const threads = useChatThreads({ phase, hasPendingTurn: () => pendingToolCall !== null || hasQueued, requireIdle, onSwitchThread: resetComposer, defaultThreadTitle: ct('newConversation') });
   const {
     workspace, setWorkspace, activeThread, liveThread, msgsThreadId, msgs, setMsgs, viewMessages,
-    viewingLiveThread, clearingWorkspace, setThreadPanelOpen, updateActiveThread,
+    viewingLiveThread, clearingWorkspace, setThreadPanelOpen, updateActiveThread, writeBackPending,
   } = threads;
   viewingLiveThreadRef.current = viewingLiveThread;
   const turn = useChatSend({
@@ -96,8 +113,9 @@ export function useChatPanelController({ store, preferences, onOpenModels, activ
     input, setInput, attachments, documents, setAttachments, setDocuments,
     mcpEntryByFunctionName, mcpDefinitions, atBottomRef, phase, setPhase,
     selectedSkillIds: skills.selectedSkillIds, onSkillsAccepted: skills.clearSelectedSkills, locale,
+    onQueuedNotSent: (message) => restoreUnsentRef.current(message),
   });
-  const { setError, error, aborting, pendingToolCall, toolCallInProgress, retryToolsMissing, send, regenerate, continueResponse, stop, resetChatState } = turn;
+  const { setError, error, aborting, pendingToolCall, toolCallInProgress, retryToolsMissing, sendQueued, regenerate, continueResponse, stop, rejectPendingTool, resetChatState } = turn;
 
   const visiblePhase = viewingLiveThread ? phase : 'idle';
   const visibleError = viewingLiveThread ? error : null;
@@ -121,7 +139,15 @@ export function useChatPanelController({ store, preferences, onOpenModels, activ
   const generates = selectedStatus.engine?.tasks?.includes('generate') ?? true;
   // A session that serves only other tasks (embeddings, transcription) is explained by those tasks, not as a missing chat template.
   const chatUnavailable = !serverOn ? null : !generates ? chatTaskCopy(locale, selectedStatus.engine?.tasks ?? []) : !chatSupported ? chatTemplateCopy[locale] : null;
-  const canSend = viewingLiveThread && serverOn && chatSupported && !startingSession && !clearingWorkspace && generates && !!apiKey && !!model && !incompatibleMedia && attachmentStatus !== 'reading' && !projectDocumentsLoading && !projectDocumentsError && phase === 'idle' && !pendingToolCall && !aborting && !store.busy && (!!input.trim() || attachments.length > 0 || documents.length > 0);
+  // Whether the live conversation can start a turn now, whoever is viewing it.
+  const turnReady = serverOn && chatSupported && !startingSession && !clearingWorkspace && generates && !!apiKey && !!model && !projectDocumentsLoading && !projectDocumentsError && phase === 'idle' && !pendingToolCall && !aborting && !store.busy;
+  const composerReady = !incompatibleMedia && attachmentStatus !== 'reading' && (!!input.trim() || attachments.length > 0 || documents.length > 0);
+  const canSend = viewingLiveThread && turnReady && composerReady;
+  // A message can wait for a reply, an approval or a model load, but not for a
+  // session that cannot chat at all: it would never leave the queue.
+  const canQueue = viewingLiveThread && !clearingWorkspace && composerReady && !chatUnavailable;
+  const turnBusy = phase !== 'idle' || pendingToolCall !== null;
+  const busySubmit: ChatBusySubmit = preferences?.chat.busySubmit ?? 'queue';
   const canEditMessages = viewingLiveThread && phase === 'idle' && !pendingToolCall && !toolCallInProgress && !aborting;
   const canRegenerate = viewingLiveThread && serverOn && chatSupported && !startingSession && !clearingWorkspace && generates && !!apiKey && !!model && !projectDocumentsLoading && !projectDocumentsError && phase === 'idle' && !pendingToolCall && !toolCallInProgress && !aborting && !store.busy;
   const disabled = !serverOn || !model || !apiKey;
@@ -148,7 +174,7 @@ export function useChatPanelController({ store, preferences, onOpenModels, activ
       if (document.querySelector('dialog[open], details[open], [role="listbox"]')) return;
       if (!viewingLiveThreadRef.current || phase === 'idle' || aborting) return;
       event.preventDefault();
-      stop();
+      stopRef.current();
     };
     const onShortcutNewThread = () => startNewThreadRef.current();
     window.addEventListener('keydown', onGlobalKeyDown);
@@ -157,7 +183,7 @@ export function useChatPanelController({ store, preferences, onOpenModels, activ
       window.removeEventListener('keydown', onGlobalKeyDown);
       window.removeEventListener('aiolm:chat-new-thread', onShortcutNewThread);
     };
-  }, [active, phase, aborting, stop]);
+  }, [active, phase, aborting]);
 
   const bubbleActionRef = useRef({
     canEditMessages, canRegenerate, msgs, setMsgs, setInput, setAttachments, setDocuments,
@@ -209,29 +235,152 @@ export function useChatPanelController({ store, preferences, onOpenModels, activ
     void state.continueResponse();
   }, []);
 
+  // Resolve the full automatic title with the user's action, before retrieval
+  // or generation can finish and resize the conversation heading later. Queued
+  // messages may start while another conversation is open, so this names the
+  // live conversation, not the one on screen.
+  const retitleLiveThread = (text: string) => {
+    if (!text.trim() || !isGeneratedChatTitle(liveThread?.title)) return;
+    setWorkspace((current) => ({
+      ...current,
+      threads: current.threads.map((thread) => thread.id === msgsThreadId && isGeneratedChatTitle(thread.title)
+        ? { ...thread, title: titleFromMessage(text), updatedAt: Date.now() } : thread),
+    }));
+  };
+
+  // The draft leaves the composer as soon as it is sent, so the composer is
+  // free for the next message while this one is still being prepared.
   const sendMessage = () => {
     if (!canSend) return;
     setUiError(null);
-    // Resolve the full automatic title with the user's action, before retrieval
-    // or generation can finish and resize the conversation heading later.
-    if (isGeneratedChatTitle(activeThread?.title) && input.trim()) {
-      updateActiveThread({ title: titleFromMessage(input) });
-    }
-    void send(false, undefined, canSend);
+    retitleLiveThread(input);
+    void sendQueued(takeComposer());
   };
 
+  const takeComposer = (): QueuedChatMessage => {
+    const item = { id: crypto.randomUUID(), text: input, images: attachments, documents, skillIds: skills.selectedSkillIds.slice() };
+    setInput('');
+    setAttachments([]);
+    setDocuments([]);
+    skills.clearSelectedSkills();
+    return item;
+  };
+
+  /** Ends whatever holds the conversation so `item` starts as soon as it can. */
+  const steerWith = (item: QueuedChatMessage) => {
+    // An earlier message waiting to steer keeps its place right after this one.
+    if (steering) setQueue((current) => [steering, ...current]);
+    setSteering(item);
+    if (pendingToolCall) rejectPendingTool();
+    else if (phase !== 'idle' && !aborting) stop();
+  };
+
+  const submitComposer = (mode: ChatBusySubmit) => {
+    // With messages already waiting, a new one goes behind them unless the
+    // queue was paused, which hands the next turn back to the user.
+    if (canSend && (!hasQueued || queuePaused)) { sendMessage(); return; }
+    if (!canQueue) return;
+    setUiError(null);
+    const item = takeComposer();
+    if (mode === 'steer') steerWith(item);
+    else setQueue((current) => [...current, item]);
+  };
+
+  // A message whose request never went out returns to an empty composer as it
+  // was; if a newer draft is already there, it waits at the head of a paused queue.
+  const composerRef = useRef({ input, attachments, documents });
+  composerRef.current = { input, attachments, documents };
+  const restoreUnsentRef = useRef<(message: QueuedChatMessage) => void>(() => undefined);
+  restoreUnsentRef.current = (message) => {
+    const composer = composerRef.current;
+    if (!composer.input.trim() && composer.attachments.length === 0 && composer.documents.length === 0) {
+      composerRef.current = { input: message.text, attachments: message.images, documents: message.documents };
+      setInput(message.text);
+      setAttachments(message.images);
+      setDocuments(message.documents);
+      skills.setSelectedSkillIds(message.skillIds);
+      return;
+    }
+    setQueue((current) => [message, ...current]);
+    setQueuePaused(true);
+  };
+
+  const steerQueued = (id: string) => {
+    const item = queue.find((candidate) => candidate.id === id);
+    if (!item) return;
+    setQueue((current) => current.filter((candidate) => candidate.id !== id));
+    steerWith(item);
+  };
+  const removeQueued = (id: string) => setQueue((current) => current.filter((candidate) => candidate.id !== id));
+  const resumeQueue = () => {
+    setError(null);
+    setQueuePaused(false);
+  };
+
+  // A stop the user asked for, or a failed turn, must not be followed by the
+  // next queued message on its own: the queue waits until it is resumed.
+  const stopByUser = () => {
+    if (hasQueued) setQueuePaused(true);
+    stop();
+  };
+  const stopRef = useRef(stopByUser);
+  stopRef.current = stopByUser;
+  useEffect(() => {
+    // Rejecting an approval to steer reports an error too; that one was asked for.
+    if (error && queue.length > 0 && !steering) setQueuePaused(true);
+  }, [error, queue.length, steering]);
+  useEffect(() => {
+    if (!hasQueued && queuePaused) setQueuePaused(false);
+  }, [hasQueued, queuePaused]);
+
+  const dispatchRef = useRef<() => void>(() => undefined);
+  dispatchRef.current = () => {
+    // A steering message runs past a pause or an error; the queue does not.
+    const next = steering ?? (!queuePaused && !error ? queue[0] : undefined);
+    if (!next) return;
+    const modalitiesNow = modalities ?? { text: true, image: visionReady, audio: false, video: false };
+    if (next.images.some(image => !canPrepareAttachment(image, modalitiesNow, mediaOptions))) {
+      // Kept, not dropped: the user can remove it or switch to a capable session.
+      if (steering) {
+        setSteering(null);
+        setQueue((current) => [next, ...current]);
+      }
+      setQueuePaused(true);
+      setUiError(ct('unsupportedAttachment'));
+      return;
+    }
+    if (steering) setSteering(null);
+    else setQueue((current) => current.filter((candidate) => candidate.id !== next.id));
+    setUiError(null);
+    retitleLiveThread(next.text);
+    void sendQueued(next);
+  };
+  // Started only after the finished turn is written back: the next turn's
+  // history is read from the workspace, not from the buffer being released.
+  useEffect(() => {
+    if (turnReady && !writeBackPending) dispatchRef.current();
+  }, [turnReady, writeBackPending, steering, queue, queuePaused, error]);
+
   const enterToSend = preferences?.chat.enterToSend ?? true;
+  const otherSubmit: ChatBusySubmit = busySubmit === 'queue' ? 'steer' : 'queue';
   const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // IME composition (including the keyCode 229 some engines report) must never send.
     if (event.nativeEvent.isComposing || event.keyCode === 229) return;
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
       event.preventDefault();
-      sendMessage();
+      submitComposer(busySubmit);
+      return;
+    }
+    // Alt+Enter picks the other busy action, so both stay one keystroke away.
+    if (event.key === 'Enter' && event.altKey && !event.shiftKey && !event.ctrlKey && !event.metaKey) {
+      if (!turnBusy) return;
+      event.preventDefault();
+      submitComposer(otherSubmit);
       return;
     }
     if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && enterToSend) {
       event.preventDefault();
-      sendMessage();
+      submitComposer(busySubmit);
     }
   };
 
@@ -255,5 +404,10 @@ export function useChatPanelController({ store, preferences, onOpenModels, activ
     chatUnavailable, canSend, canEditMessages, canRegenerate, disabled, loadingModel, closeThreadPanel, startNewThread,
     copyMessage, editUserMessage, regenerateLast, continueLast, sendMessage,
     enterToSend, onKeyDown, lastMessage, responseState, recoverable,
+    queueState: {
+      queue, steering, queuePaused, canQueue, turnBusy, busySubmit,
+      queueMessage: () => submitComposer('queue'), steerMessage: () => submitComposer('steer'),
+      steerQueued, removeQueued, resumeQueue, stopByUser,
+    },
   };
 }

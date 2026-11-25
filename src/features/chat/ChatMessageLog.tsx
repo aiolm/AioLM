@@ -28,6 +28,8 @@ interface ChatMessageLogProps {
   phase: ChatPhase;
   copiedIndex: number | null;
   compactMessages: boolean;
+  /** Reasoning blocks start open instead of collapsed. */
+  expandReasoning?: boolean;
   locale: Locale;
   onCopy: (index: number, text: string) => void;
   onEditMessage?: (index: number) => void;
@@ -67,7 +69,7 @@ const StreamingMessageBubble = memo(function StreamingMessageBubble({
 
 function ChatMessageLog({
   scrollRef, onScrollAtBottomChange, disabled, status, model, serverOn, canGenerate, msgs, streamingDraftStore, onDraftRendered, phase,
-  copiedIndex, compactMessages, locale, onCopy, onEditMessage, editDisabled = false, onRegenerate, onContinue, regenerateDisabled = false,
+  copiedIndex, compactMessages, expandReasoning = false, locale, onCopy, onEditMessage, editDisabled = false, onRegenerate, onContinue, regenerateDisabled = false,
   error, onDismissError, showScrollToBottom = false, onScrollToBottom, canRetry, recoverable, retryNotice, retryToolsAction, onRetry, ct,
   onOpenModels, onDiscoverModels, modelSettingsLabel, onStart, starting,
 }: ChatMessageLogProps) {
@@ -132,7 +134,7 @@ function ChatMessageLog({
         const bubbleProps = {
           message, index, isLast,
           phase: isLast && phase !== 'preparing' ? phase : 'idle' as const,
-          copied: copiedIndex === index, compact: compactMessages, locale, onCopy,
+          copied: copiedIndex === index, compact: compactMessages, expandReasoning, locale, onCopy,
           onEditMessage, editDisabled,
           onRegenerate: isLast ? onRegenerate : undefined,
           onContinue: isLast ? onContinue : undefined,

@@ -161,7 +161,8 @@ describe("typography and notification preferences", () => {
     } }));
     expect(loadPreferences()).toMatchObject({
       locale: "ja", theme: "dark",
-      chat: { enterToSend: false, compactMessages: true, lineSpacing: "normal" },
+      // Saved before the busy-submit choice existed: queueing never interrupts a reply.
+      chat: { enterToSend: false, compactMessages: true, lineSpacing: "normal", busySubmit: "queue", expandReasoning: false },
       appearance: { reduceMotion: true, density: "compact", fontFamily: "default", codeFontFamily: "default" },
       notifications: { chat: false, downloads: false, benchmark: false },
     });
@@ -171,11 +172,13 @@ describe("typography and notification preferences", () => {
     const d = defaultPreferences();
     const parsed = validatePreferences({
       ...d,
-      chat: { ...d.chat, lineSpacing: "double" },
+      chat: { ...d.chat, lineSpacing: "double", busySubmit: "interrupt", expandReasoning: "yes" },
       appearance: { ...d.appearance, fontFamily: "Comic Sans MS", codeFontFamily: "serif" },
       notifications: { chat: "true", downloads: 1, benchmark: true },
     } as unknown as AppPreferences);
     expect(parsed.chat.lineSpacing).toBe("normal");
+    expect(parsed.chat.busySubmit).toBe("queue");
+    expect(parsed.chat.expandReasoning).toBe(false);
     expect(parsed.appearance).toMatchObject({ fontFamily: "default", codeFontFamily: "default" });
     expect(parsed.notifications).toEqual({ chat: false, downloads: false, benchmark: true });
     expect(validatePreferences({ notifications: "all" } as unknown as AppPreferences).notifications).toEqual(d.notifications);
@@ -186,7 +189,7 @@ describe("typography and notification preferences", () => {
     const d = defaultPreferences();
     const values: AppPreferences = {
       ...d,
-      chat: { ...d.chat, lineSpacing: "relaxed" },
+      chat: { ...d.chat, lineSpacing: "relaxed", busySubmit: "steer", expandReasoning: true },
       appearance: { ...d.appearance, fontFamily: "serif", codeFontFamily: "system" },
       notifications: { chat: true, downloads: false, benchmark: true },
     };

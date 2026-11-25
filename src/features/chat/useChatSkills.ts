@@ -57,6 +57,6 @@ export function useChatSkills() {
 
   return {
     native, catalog, warnings, loadError, loading, loaded,
-    selectedSkillIds, selectedSkills, toggleSkill, clearSelectedSkills, refreshSkills,
+    selectedSkillIds, setSelectedSkillIds, selectedSkills, toggleSkill, clearSelectedSkills, refreshSkills,
   };
 }

@@ -20,6 +20,19 @@ export interface FailedRequest {
   partialReasoning?: string;
 }
 
+/**
+ * A message taken out of the composer before its turn could start. It keeps
+ * everything the composer held at that moment, so later edits to the composer
+ * never change what is sent.
+ */
+export interface QueuedChatMessage {
+  id: string;
+  text: string;
+  images: ImageAttachment[];
+  documents: DocumentAttachment[];
+  skillIds: string[];
+}
+
 export interface RequestMetricsAccumulator {
   preparationStartedAt: number;
   requestStartedAt?: number;

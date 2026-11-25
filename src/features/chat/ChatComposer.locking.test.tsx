@@ -61,7 +61,7 @@ describe('composer turn locks', () => {
     expect(picker).toHaveAttribute('open');
   });
 
-  it('locks draft and tool changes during approval while preserving the draft and approval actions', () => {
+  it('keeps the draft editable but locks tool changes during approval while preserving the approval actions', () => {
     const options = props();
     options.selectedMcpTools = ['catalog:lookup', 'offline:remember'];
     options.pendingToolCall = { serverId: 'catalog', serverName: 'Catalog', toolName: 'lookup', argumentsValue: {},
@@ -69,7 +69,7 @@ describe('composer turn locks', () => {
     const view = render(<I18nProvider initialLocale="en"><ChatComposer {...options} /></I18nProvider>);
     const details = screen.getByText('mcpTools').closest('details')!;
     details.open = true;
-    expect(screen.getByRole('textbox', { name: 'chatMessage' })).toBeDisabled();
+    expect(screen.getByRole('textbox', { name: 'chatMessage' })).toBeEnabled();
     expect(screen.getByRole('textbox', { name: 'chatMessage' })).toHaveValue('Next question');
     expect(within(details).getByRole('checkbox')).toBeDisabled();
     for (const name of ['attachFile', 'send', 'loadMcpTools']) expect(screen.getByRole('button', { name })).toBeDisabled();
@@ -122,14 +122,14 @@ describe('composer turn locks', () => {
     const options = props();
     const view = render(<I18nProvider initialLocale="en"><ChatComposer {...options} phase="preparing" toolCallInProgress /></I18nProvider>);
     expect(screen.getByRole('status')).toHaveTextContent('waitingMcpTool');
-    expect(screen.getByRole('textbox', { name: 'chatMessage' })).toBeDisabled();
+    expect(screen.getByRole('textbox', { name: 'chatMessage' })).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: 'stop' }));
     expect(options.onStop).toHaveBeenCalledOnce();
     view.rerender(<I18nProvider initialLocale="en"><ChatComposer {...options} phase="prefill" toolCallInProgress={false} /></I18nProvider>);
-    expect(screen.getByRole('textbox', { name: 'chatMessage' })).toBeDisabled();
+    expect(screen.getByRole('textbox', { name: 'chatMessage' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'stop' })).toBeEnabled();
     view.rerender(<I18nProvider initialLocale="en"><ChatComposer {...options} phase="decoding" toolCallInProgress={false} /></I18nProvider>);
-    expect(screen.getByRole('textbox', { name: 'chatMessage' })).toBeDisabled();
+    expect(screen.getByRole('textbox', { name: 'chatMessage' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'stop' })).toBeEnabled();
   });
 });
