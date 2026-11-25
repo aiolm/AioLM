@@ -11,6 +11,7 @@ import { estimateRemainingSeconds } from "../lib/transfer";
 import Badge from "./Badge";
 import ProgressBar from "./ProgressBar";
 import DiagnosticDetails, { isLongDiagnostic, summarizeDiagnostic } from "./DiagnosticDetails";
+import DismissButton from "./DismissButton";
 import FeedbackBanner from "./FeedbackBanner";
 
 export function formatTaskPhase(phase: string | undefined, t: ReturnType<typeof useI18n>["t"]): string {
@@ -125,7 +126,7 @@ export default function TaskStrip({
               <span className="app-task-strip__action">
                 {!activeTask && task.state !== "completed" && task.action && <button type="button" className="app-button app-button--secondary app-button--sm" onClick={task.action.onClick}>{task.action.label}</button>}
                 {activeTask && task.cancel && !localTaskIds.has(task.id) && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={task.state === "cancelling"} onClick={() => void cancel(task)}><StableLabel value={task.state === "cancelling" ? t("ui.taskCancelling") : stopLabel} labels={[t("ui.taskCancelling"), stopLabel]} /></button>}
-                {!activeTask && <button type="button" className="app-button app-button--ghost app-button--sm" aria-label={`${t("ui.taskDismiss")}: ${label}`} onClick={() => dismissTask(task.id)}>{t("ui.taskDismiss")}</button>}
+                {!activeTask && <DismissButton label={`${t("ui.taskDismiss")}: ${label}`} onClick={() => dismissTask(task.id)} />}
               </span>
             </div>
           );

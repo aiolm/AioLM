@@ -25,6 +25,9 @@ interface ChatComposerProps {
   onPasteImages?: (files: File[]) => void;
   locale?: Locale;
   contextWarning: string | null;
+  /** Local instruction and skill warnings, which the user may dismiss. */
+  personalizationWarning?: string | null;
+  onDismissPersonalizationWarning?: () => void;
   contextSources: string[];
   mcpCatalog: ChatMcpTool[];
   mcpCatalogLoaded?: boolean;
@@ -85,7 +88,7 @@ interface ChatComposerProps {
 
 export default function ChatComposer({
   dropTargetRef, isDragOver = false, textareaRef, onPasteImages,
-  contextWarning, contextSources, mcpCatalog, mcpCatalogLoaded = false, selectedMcpTools, toggleMcpTool,
+  contextWarning, personalizationWarning = null, onDismissPersonalizationWarning, contextSources, mcpCatalog, mcpCatalogLoaded = false, selectedMcpTools, toggleMcpTool,
   onSelectAllMcpTools, onClearMcpTools, loadingMcpTools, refreshMcpTools,
   mcpDefinitions, pendingToolCall, toolCallInProgress, onApproveTool, onRejectTool, attachments, onRemoveAttachment, attachmentStatus,
   documents, onRemoveDocument, input, setInput, onKeyDown, disabled, enterToSend = true, phase, onAddAttachment, onStop,
@@ -243,6 +246,7 @@ export default function ChatComposer({
       </div>
       <PanelFeedback>
           {contextWarning && <FeedbackBanner tone="warning" aria-label={ct("contextWarningLabel")}>{contextWarning}</FeedbackBanner>}
+          {personalizationWarning && <FeedbackBanner tone="warning" aria-label={ct("contextWarningLabel")} onDismiss={onDismissPersonalizationWarning}>{personalizationWarning}</FeedbackBanner>}
       </PanelFeedback>
       {contextSources.length > 0 && <FeedbackBanner tone="info" className="mb-2"><span className="font-medium">{ct("contextSources")}</span><span className="mx-1.5 opacity-40">·</span>{normalizeDisplayText(contextSources.join(" · "))}</FeedbackBanner>}
       <div className={`chat-composer-actions${isDragOver ? " is-drag-over" : ""}`} ref={dropTargetRef}>

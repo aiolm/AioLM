@@ -19,6 +19,7 @@ import type { PendingDownload } from "../api/types";
 import { activityCenterCopy } from "./activityCenterCopy";
 import ConfirmDialog from "./ConfirmDialog";
 import DiagnosticDetails, { isLongDiagnostic, summarizeDiagnostic } from "./DiagnosticDetails";
+import DismissButton from "./DismissButton";
 import FeedbackBanner from "./FeedbackBanner";
 import ProgressBar from "./ProgressBar";
 import StableLabel from "./StableLabel";
@@ -399,14 +400,7 @@ export default function DownloadsCenter({
                         <span className="aiolm-center-item__name" title={name}>
                           {name}
                         </span>
-                        <button
-                          type="button"
-                          className="app-button app-button--ghost app-button--sm"
-                          aria-label={`${t("ui.taskDismiss")}: ${name}`}
-                          onClick={() => dismissTask(task.id)}
-                        >
-                          {t("ui.taskDismiss")}
-                        </button>
+                        <DismissButton label={`${t("ui.taskDismiss")}: ${name}`} onClick={() => dismissTask(task.id)} />
                       </div>
                       {task.detail &&
                         (isLongDiagnostic(task.detail) ? (
@@ -453,14 +447,10 @@ export default function DownloadsCenter({
                             {copy.configureAction}
                           </button>
                         )}
-                        <button
-                          type="button"
-                          className="app-button app-button--ghost app-button--sm"
-                          aria-label={`${t("ui.taskDismiss")}: ${normalizeDisplayText(record.label)}`}
+                        <DismissButton
+                          label={`${t("ui.taskDismiss")}: ${normalizeDisplayText(record.label)}`}
                           onClick={() => dismissCompletedDownload(record.id)}
-                        >
-                          {t("ui.taskDismiss")}
-                        </button>
+                        />
                       </div>
                     </div>
                   </div>
@@ -475,14 +465,7 @@ export default function DownloadsCenter({
                     >
                       <div className="aiolm-center-item__top">
                         <span className="aiolm-center-item__name">{name}</span>
-                        <button
-                          type="button"
-                          className="app-button app-button--ghost app-button--sm"
-                          aria-label={`${t("ui.taskDismiss")}: ${name}`}
-                          onClick={() => dismissTask(task.id)}
-                        >
-                          {t("ui.taskDismiss")}
-                        </button>
+                        <DismissButton label={`${t("ui.taskDismiss")}: ${name}`} onClick={() => dismissTask(task.id)} />
                       </div>
                     </div>
                   );

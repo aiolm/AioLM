@@ -180,7 +180,9 @@ describe("chat personalization", () => {
     answers("Done");
     const { result } = setup();
     await act(async () => { await result.current.send(); });
-    expect(result.current.contextWarning).toContain("exceeds 64 KiB");
+    expect(result.current.personalizationWarnings).toEqual(["skills/huge/SKILL.md exceeds 64 KiB and was skipped."]);
+    // Kept apart from the per-turn warnings so the composer can offer a dismiss.
+    expect(result.current.contextWarning).toBeNull();
   });
 
   it("reads a catalog skill automatically, continues the stream and announces only the final answer", async () => {

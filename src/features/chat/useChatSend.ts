@@ -44,6 +44,7 @@ export function useChatSend({
   const pt = (key: ChatPersonalizationTextKey, vars?: Record<string, string | number>) => chatPersonalizationText(locale, key, vars);
   const [error, setError] = useState<string | null>(null);
   const [contextWarning, setContextWarning] = useState<string | null>(null);
+  const [personalizationWarnings, setPersonalizationWarnings] = useState<string[]>([]);
   const [contextSources, setContextSources] = useState<string[]>([]);
   const [aborting, setAborting] = useState(false);
   const { streamingDraftStore, setStreamingDraft, renderFrameRef, streamRef, metricsRef, streamResponsesRef,
@@ -96,6 +97,7 @@ export function useChatSend({
     setError(null);
     documentTruncationRef.current = false;
     setContextWarning(null);
+    setPersonalizationWarnings([]);
     setContextSources([]);
   };
 
@@ -134,6 +136,7 @@ export function useChatSend({
       setAborting(false);
       setError(null);
       setContextWarning(null);
+      setPersonalizationWarnings([]);
       setContextSources([]);
       setPhase("idle");
     };
@@ -278,13 +281,14 @@ export function useChatSend({
       if (documentChunksTruncated) documentTruncationRef.current = true;
       setContextSources(retrievalSources);
       const historySourceMsgs = regenerate ? msgs.slice(0, -2) : msgs;
-      const { bounded, runtimeContext, maxContextTokens, warnings, sampling } = buildTurnRequest({
+      const { bounded, runtimeContext, maxContextTokens, warnings, personalizationWarnings: turnPersonalizationWarnings, sampling } = buildTurnRequest({
         turn, text, images, documentContext,
         suppliedHistory: historyOverride ?? (retry && failed ? failed.history : undefined),
         msgs: historySourceMsgs, cache: historyConversionCacheRef.current!, toolFollowup,
         documentChunksTruncated: documentTruncationRef.current, locale,
       });
       setContextWarning(warnings.length > 0 ? warnings.join(" ") : null);
+      setPersonalizationWarnings(turnPersonalizationWarnings);
       // A tool follow-up carries no user input of its own: keep the original request so Retry can still resend it.
       failedRef.current = toolFollowup && failed
         ? { text: failed.text, images: failed.images, documents: failed.documents, history: bounded.messages, personalization: turn.personalization, tools: failed.tools }
@@ -458,7 +462,7 @@ export function useChatSend({
   };
 
   return {
-    error, setError, contextWarning, contextSources,
+    error, setError, contextWarning, personalizationWarnings, contextSources,
     aborting, pendingToolCall, toolCallInProgress, streamingDraftStore, failedRef, canRetry, retryUnavailable, retryToolsMissing,
     send, sendQueued, regenerate, continueResponse, approvePendingTool, rejectPendingTool, stop, resetChatState,
   };

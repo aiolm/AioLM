@@ -11,6 +11,7 @@ import {
 } from "../state/taskRegistry";
 import { activityCenterCopy } from "./activityCenterCopy";
 import DiagnosticDetails, { isLongDiagnostic, summarizeDiagnostic } from "./DiagnosticDetails";
+import DismissButton from "./DismissButton";
 import FeedbackBanner from "./FeedbackBanner";
 import ProgressBar from "./ProgressBar";
 import StableLabel from "./StableLabel";
@@ -276,14 +277,7 @@ export default function LaunchStatusCenter({
                           </button>
                         )}
                         {!activeTask && (
-                          <button
-                            type="button"
-                            className="app-button app-button--ghost app-button--sm"
-                            aria-label={`${t("ui.taskDismiss")}: ${label}`}
-                            onClick={() => dismissTask(task.id)}
-                          >
-                            {t("ui.taskDismiss")}
-                          </button>
+                          <DismissButton label={`${t("ui.taskDismiss")}: ${label}`} onClick={() => dismissTask(task.id)} />
                         )}
                       </div>
                     </div>

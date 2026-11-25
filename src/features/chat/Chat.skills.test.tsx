@@ -9,6 +9,7 @@ import { isNativeRuntimeAvailable } from "../../shared/api/transport";
 import { createTestStore } from "../../testing/appStore";
 import { defined } from "../../testing/assertDefined";
 import type { AppStore } from "../../shared/state/store";
+import { resetPersonalizationWarningDismissalForTests } from "./personalizationWarningDismissal";
 
 vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
 vi.mock("../../shared/api/index", () => ({
@@ -66,6 +67,7 @@ async function openSkills() {
 beforeEach(() => {
   localStorage.clear();
   vi.clearAllMocks();
+  resetPersonalizationWarningDismissalForTests();
   nativeMock.mockReturnValue(true);
   loadMock.mockResolvedValue({ instructions: [], skills: [pdf, review], warnings: [] });
   readMock.mockImplementation(async (id) => ({ skill: [pdf, review].find((skill) => skill.id === id)!, content: `BODY-OF-${id}` }));
@@ -105,6 +107,38 @@ describe("chat skill picker", () => {
     if (typeof content !== "string") throw new Error("Expected text content");
     expect(content.split("BODY-OF-agents:review").length - 1).toBe(1);
     expect(screen.queryByRole("group", { name: "Selected skills" })).not.toBeInTheDocument();
+  });
+
+  it("lets a skill warning that returns on every refresh and send be dismissed until it changes", async () => {
+    const skipped = "Skill skipped: synthetic/huge/SKILL.md is larger than 64 KiB.";
+    loadMock.mockResolvedValue({ instructions: [], skills: [pdf], warnings: [skipped] });
+    renderPanel();
+    await screen.findByRole("log", { name: "Conversation" });
+    const details = await openSkills();
+    expect(await within(details).findByText(`Local instructions: ${skipped}`)).toBeInTheDocument();
+
+    answers("Done");
+    fireEvent.change(screen.getByLabelText("Chat message"), { target: { value: "Hello" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await screen.findByText("Done", { exact: true });
+    expect(screen.getAllByText(`Local instructions: ${skipped}`)).toHaveLength(2);
+
+    // One dismiss hides the same list in the picker and the composer.
+    fireEvent.click(within(details).getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByText(`Local instructions: ${skipped}`)).not.toBeInTheDocument();
+
+    // A refresh that still finds the same problem stays quiet.
+    const callsBefore = loadMock.mock.calls.length;
+    fireEvent.click(within(details).getByRole("button", { name: "Refresh skills" }));
+    await waitFor(() => expect(loadMock.mock.calls.length).toBe(callsBefore + 1));
+    await waitFor(() => expect(within(details).getByRole("button", { name: "Refresh skills" })).toBeEnabled());
+    expect(screen.queryByText(`Local instructions: ${skipped}`)).not.toBeInTheDocument();
+
+    // A different problem is news and shows again.
+    const duplicate = "Skill skipped: synthetic/pdf2/SKILL.md uses the name \"pdf\" already used by the pdf folder.";
+    loadMock.mockResolvedValue({ instructions: [], skills: [pdf], warnings: [duplicate] });
+    fireEvent.click(within(details).getByRole("button", { name: "Refresh skills" }));
+    expect(await within(details).findByText(`Local instructions: ${duplicate}`)).toBeInTheDocument();
   });
 
   it("keeps the draft and selection when a $skill is unknown", async () => {

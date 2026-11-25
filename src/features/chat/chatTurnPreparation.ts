@@ -80,7 +80,6 @@ export function buildTurnRequest({ turn, text, images, documentContext, supplied
   const warnings = [
     documentChunksTruncated ? translate(locale, "chat.documentChunksLimited", { count: MAX_SEARCHABLE_DOCUMENT_CHUNKS }) : null,
     bounded.trimmed ? translate(locale, "chat.historyTrimmed") : null,
-    turn.personalization?.warnings.length ? chatPersonalizationText(locale, "instructionWarnings", { warnings: turn.personalization.warnings.join(" ") }) : null,
   ].filter((warning): warning is string => warning !== null);
   const sampling = {
     provider: requestConfig?.active_provider,
@@ -96,5 +95,8 @@ export function buildTurnRequest({ turn, text, images, documentContext, supplied
     options: chatOptions,
     tools: turn.tools,
   };
-  return { bounded, runtimeContext, maxContextTokens, warnings, sampling };
+  // Instruction and skill warnings stay separate so the composer can let the
+  // user dismiss them; the other warnings describe this turn only.
+  const personalizationWarnings = turn.personalization?.warnings ?? [];
+  return { bounded, runtimeContext, maxContextTokens, warnings, personalizationWarnings, sampling };
 }

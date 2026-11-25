@@ -9,6 +9,7 @@ import { modelSettingsCopy } from "../model-settings/modelSettingsCopy";
 import { isModelFilePath, modelDisplayName, normalizeDisplayPath, stripModelShardSuffix } from "../../shared/lib/displayPaths";
 import { chatRetryCopy, chatRetryToolsCopy } from "./chatRetryCopy";
 import ChatSkillPicker from "./ChatSkillPicker";
+import { dismissPersonalizationWarnings, useVisiblePersonalizationWarnings } from "./personalizationWarningDismissal";
 import { embeddingSessionLabel } from './embeddingTarget';
 import { embeddingTargetCopy } from './embeddingTargetCopy';
 import { mediaPreparationCopy } from './mediaPreparationCopy';
@@ -41,7 +42,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
     },
     msgsThreadId,
     turn: {
-      contextWarning, contextSources, aborting, pendingToolCall, toolCallInProgress, streamingDraftStore,
+      contextWarning, personalizationWarnings, contextSources, aborting, pendingToolCall, toolCallInProgress, streamingDraftStore,
       canRetry, retryUnavailable, setError, send, approvePendingTool, rejectPendingTool,
     },
     project: {
@@ -59,6 +60,8 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
   const mediaCopy = mediaPreparationCopy[locale];
   const projectCopy = projectChatBindingCopy[locale];
   const ownerCopy = chatTurnOwnerCopy[locale];
+  const pickerWarnings = useVisiblePersonalizationWarnings(skills.warnings);
+  const turnWarnings = useVisiblePersonalizationWarnings(personalizationWarnings);
 
   return (
     <div className="app-page-scroll chat-page">
@@ -206,6 +209,8 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
             onPasteImages={(files) => void addPastedImages(files)}
             locale={locale}
             contextWarning={[contextWarning, incompatibleMedia ? providerCopy[locale].blocked : null, chatUnavailable].filter(Boolean).join(' ') || null}
+            personalizationWarning={turnWarnings.length > 0 ? pt("instructionWarnings", { warnings: turnWarnings.join(" ") }) : null}
+            onDismissPersonalizationWarning={() => dismissPersonalizationWarnings(personalizationWarnings)}
             contextSources={contextSources}
             mcpCatalog={mcpCatalog}
             mcpCatalogLoaded={mcpCatalogLoaded}
@@ -242,7 +247,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
             responseWithoutOutput={lastMessage?.role === 'assistant' && !lastMessage.content && !lastMessage.reasoning}
             responseFinishReason={lastMessage?.finishReason}
             ct={ct}
-            skillPicker={<ChatSkillPicker native={skills.native} catalog={skills.catalog} warnings={skills.warnings} loadError={skills.loadError} loading={skills.loading} loaded={skills.loaded} selectedSkillIds={skills.selectedSkillIds} onToggleSkill={skills.toggleSkill} onRefresh={() => void skills.refreshSkills()} locked={phase !== "idle" || pendingToolCall !== null} closeLabel={ct("close")} pt={pt} />}
+            skillPicker={<ChatSkillPicker native={skills.native} catalog={skills.catalog} warnings={pickerWarnings} onDismissWarnings={() => dismissPersonalizationWarnings(skills.warnings)} loadError={skills.loadError} loading={skills.loading} loaded={skills.loaded} selectedSkillIds={skills.selectedSkillIds} onToggleSkill={skills.toggleSkill} onRefresh={() => void skills.refreshSkills()} locked={phase !== "idle" || pendingToolCall !== null} closeLabel={ct("close")} pt={pt} />}
             selectedSkills={skills.selectedSkills}
             onRemoveSkill={skills.toggleSkill}
             skillsLocked={phase !== "idle" || pendingToolCall !== null}

@@ -151,6 +151,8 @@
    notice carries the status, the action keeps ordinary ink. */
 .app-feedback-action:not(:disabled) { background: var(--ui-surface); border-color: var(--feedback-line); color: var(--ui-ink); }
 .app-feedback-action:hover:not(:disabled) { background: var(--ui-input-hover); border-color: var(--feedback-line); color: var(--ui-ink); }
+/* The shared dismiss X stays quiet beside a notice's own actions. */
+.app-dismiss-button:not(:disabled) { color: var(--ui-muted); }
 .app-feedback-dismiss:not(:disabled) { color: var(--ui-muted); }
 .app-feedback-dismiss:hover:not(:disabled) { background: color-mix(in srgb, var(--feedback-ink) 12%, transparent); color: var(--ui-ink); }
 @media (max-width: 639px) {

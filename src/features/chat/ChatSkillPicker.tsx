@@ -9,13 +9,15 @@ import { filterSkills } from "./chatPersonalization";
 interface ChatSkillPickerProps {
   native: boolean;
   catalog: ChatSkill[];
-  warnings: string[];
+  /** Already filtered: empty once the user dismissed this exact list. */
+  warnings: readonly string[];
   loadError: string | null;
   loading: boolean;
   loaded: boolean;
   selectedSkillIds: string[];
   onToggleSkill: (id: string) => void;
   onRefresh: () => void;
+  onDismissWarnings: () => void;
   /** Locked while a response or MCP approval is pending. */
   locked: boolean;
   closeLabel: string;
@@ -23,7 +25,7 @@ interface ChatSkillPickerProps {
 }
 
 /** Searchable multi-select list of local skills; selections apply to the next message only. */
-export default function ChatSkillPicker({ native, catalog, warnings, loadError, loading, loaded, selectedSkillIds, onToggleSkill, onRefresh, locked, closeLabel, pt }: ChatSkillPickerProps) {
+export default function ChatSkillPicker({ native, catalog, warnings, loadError, loading, loaded, selectedSkillIds, onToggleSkill, onRefresh, onDismissWarnings, locked, closeLabel, pt }: ChatSkillPickerProps) {
   const [query, setQuery] = useState("");
   const searchId = useId();
   const hintId = useId();
@@ -47,7 +49,7 @@ export default function ChatSkillPicker({ native, catalog, warnings, loadError, 
         <p id={hintId} className="mt-2 text-xs ui-color-faint">{pt("skillsHint")}</p>
         {!native && <FeedbackBanner tone="warning" className="mt-2">{pt("nativeOnly")}</FeedbackBanner>}
         {loadError && <FeedbackBanner tone="error" className="mt-2">{pt("catalogFailed", { error: loadError })}</FeedbackBanner>}
-        {warnings.length > 0 && <FeedbackBanner tone="warning" className="mt-2">{pt("instructionWarnings", { warnings: warnings.join(" ") })}</FeedbackBanner>}
+        {warnings.length > 0 && <FeedbackBanner tone="warning" className="mt-2" onDismiss={onDismissWarnings}>{pt("instructionWarnings", { warnings: warnings.join(" ") })}</FeedbackBanner>}
         {native && loaded && (
           <>
             <label htmlFor={searchId} className="mt-2 block text-xs ui-color-muted">{pt("searchSkills")}</label>

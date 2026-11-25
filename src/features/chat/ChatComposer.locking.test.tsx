@@ -22,7 +22,7 @@ function props(): ComponentProps<typeof ChatComposer> {
 describe('composer turn locks', () => {
   it('keeps only one tool picker open without losing the draft or its send action', () => {
     const options = props();
-    options.skillPicker = <ChatSkillPicker native catalog={[]} warnings={[]} loadError={null} loading={false} loaded
+    options.skillPicker = <ChatSkillPicker native catalog={[]} warnings={[]} onDismissWarnings={vi.fn()} loadError={null} loading={false} loaded
       selectedSkillIds={[]} onToggleSkill={vi.fn()} onRefresh={vi.fn()} locked={false} closeLabel="close" pt={key => key} />;
     render(<I18nProvider initialLocale="en"><ChatComposer {...options} /></I18nProvider>);
     const mcp = screen.getByText('mcpTools').closest('details')!;

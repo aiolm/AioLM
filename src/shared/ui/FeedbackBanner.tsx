@@ -2,6 +2,7 @@ import { Children, type ReactNode } from "react";
 import { useI18n } from "../i18n/i18n";
 import { normalizeDisplayText } from "../lib/displayPaths";
 import DiagnosticDetails, { isLongDiagnostic, summarizeDiagnostic } from "./DiagnosticDetails";
+import DismissButton from "./DismissButton";
 
 export type FeedbackTone = "info" | "success" | "warning" | "error";
 
@@ -87,7 +88,7 @@ export default function FeedbackBanner({
         <div className="app-feedback-message">{collapsible ? <DiagnosticDetails summary={summarizeDiagnostic(fullText)} detail={fullText} /> : displayChildren}</div>
       </div>
       {action && <button type="button" className="app-button app-button--ghost app-button--sm app-feedback-action" disabled={action.disabled} onClick={action.onClick}>{action.label}</button>}
-      {onDismiss && <button type="button" className="app-icon-button app-icon-button--sm app-feedback-dismiss" aria-label={t("common.dismiss")} onClick={onDismiss}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true" focusable="false"><path d="M3 3 9 9M9 3 3 9" /></svg></button>}
+      {onDismiss && <DismissButton className="app-feedback-dismiss" label={t("common.dismiss")} onClick={onDismiss} />}
     </div>
   );
 }
