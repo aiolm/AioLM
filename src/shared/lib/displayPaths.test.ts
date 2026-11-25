@@ -1,8 +1,36 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { isModelFilePath, modelDisplayName, stripModelShardSuffix } from "./displayPaths";
+import { isModelFilePath, modelDisplayName, normalizeDisplayPath, restoreDisplayPath, stripModelShardSuffix } from "./displayPaths";
 
 const qwen = "Qwen3.8-Flash-Next-AD-4.27bpw-Q4_K_M-M64";
+
+describe("normalizeDisplayPath", () => {
+  it.each([
+    ["C:\\models\\hf/owner/model/model.gguf", "C:\\models\\hf\\owner\\model\\model.gguf"],
+    ["D:/documents/two.txt", "D:\\documents\\two.txt"],
+    ["\\\\?\\C:\\runtime\\lib/x64\\cudart.dll", "C:\\runtime\\lib\\x64\\cudart.dll"],
+    ["\\\\?\\UNC\\server\\share\\models/a.gguf", "\\\\server\\share\\models\\a.gguf"],
+    ["\\\\server\\share/models/a.gguf", "\\\\server\\share\\models\\a.gguf"],
+  ])("shows one separator in Windows path %s", (value, expected) => {
+    expect(normalizeDisplayPath(value)).toBe(expected);
+  });
+
+  it.each([
+    "/synthetic/models/hf/owner/model.gguf",
+    "//host/share/model.gguf",
+    "owner/model",
+    "hf/owner/model",
+    "https://example.invalid/models/a.gguf",
+    "native-speech-model",
+  ])("keeps the forward slashes of POSIX paths, URLs and model IDs: %s", value => {
+    expect(normalizeDisplayPath(value)).toBe(value);
+  });
+
+  it("keeps a stored mixed-separator path when the shown text is not edited", () => {
+    const stored = "C:/models/hf/owner/model.gguf";
+    expect(restoreDisplayPath(stored, normalizeDisplayPath(stored))).toBe(stored);
+  });
+});
 
 describe("modelDisplayName", () => {
   it.each([

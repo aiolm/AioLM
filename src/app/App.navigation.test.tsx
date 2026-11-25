@@ -250,7 +250,7 @@ describe("Workspace navigation", () => {
     store.status = { state: 'running', model: path };
     mount();
     const model = screen.getByRole("button", { name: `Choose model: ${name}.gguf` });
-    expect(model).toHaveAttribute("title", path);
+    expect(model).toHaveAttribute("title", `C:\\models\\${name}-00001-of-00033.gguf`);
     fireEvent.click(model);
     expect(await screen.findByRole("dialog", { name: "Model settings editor" })).toBeVisible();
     expect(screen.getByLabelText("Editor model")).toHaveValue(path);

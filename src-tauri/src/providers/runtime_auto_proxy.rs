@@ -376,6 +376,7 @@ async fn dispatch(
     };
     let endpoint = state
         .upstream
+        // path-separator: allow (URL path, not a file path)
         .join("chat/completions")
         .map_err(|_| failure(502, "invalid upstream chat endpoint"))?;
     let mut upstream = state.client.post(endpoint).json(&value).header(

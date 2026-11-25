@@ -1,4 +1,5 @@
 use super::*;
+use crate::relative_path::join_relative;
 
 /// Complete an already-installed vendor runtime from a compatible local SDK.
 /// Release archives for Windows ROCm may intentionally omit BLAS DLLs and
@@ -456,7 +457,7 @@ fn rocm_shared_library_dependencies(destination: &Path) -> Result<(), AppError> 
     let directories = ["", "rocm_sysdeps/lib", "llvm/lib"];
     let mut libraries = HashMap::new();
     for relative in directories {
-        let Ok(entries) = fs::read_dir(destination.join(relative)) else {
+        let Ok(entries) = fs::read_dir(join_relative(destination, relative)) else {
             continue;
         };
         for entry in entries.flatten() {
@@ -615,29 +616,29 @@ fn rocm_sdk_root_can_complete(root: &Path, destination: &Path) -> bool {
     let has_hip = directory_has_named_runtime_library(destination, "amdhip64")
         || lib_dirs
             .iter()
-            .any(|rel| directory_has_named_runtime_library(&root.join(rel), "amdhip64"));
+            .any(|rel| directory_has_named_runtime_library(&join_relative(root, rel), "amdhip64"));
     let has_hipblas = directory_has_named_runtime_library(destination, "hipblas")
         || lib_dirs
             .iter()
-            .any(|rel| directory_has_named_runtime_library(&root.join(rel), "hipblas"));
+            .any(|rel| directory_has_named_runtime_library(&join_relative(root, rel), "hipblas"));
     let has_rocblas = directory_has_named_runtime_library(destination, "rocblas")
         || lib_dirs
             .iter()
-            .any(|rel| directory_has_named_runtime_library(&root.join(rel), "rocblas"));
+            .any(|rel| directory_has_named_runtime_library(&join_relative(root, rel), "rocblas"));
     let has_hipblaslt = directory_has_named_runtime_library(destination, "hipblaslt")
         || lib_dirs
             .iter()
-            .any(|rel| directory_has_named_runtime_library(&root.join(rel), "hipblaslt"));
+            .any(|rel| directory_has_named_runtime_library(&join_relative(root, rel), "hipblaslt"));
     let rocblas_data_ok = !has_rocblas
         || blas_library_has_data(&destination.join("rocblas").join("library"))
         || ["bin/rocblas/library", "lib/rocblas/library"]
             .iter()
-            .any(|rel| blas_library_has_data(&root.join(rel)));
+            .any(|rel| blas_library_has_data(&join_relative(root, rel)));
     let hipblaslt_data_ok = !has_hipblaslt
         || blas_library_has_data(&destination.join("hipblaslt").join("library"))
         || ["bin/hipblaslt/library", "lib/hipblaslt/library"]
             .iter()
-            .any(|rel| blas_library_has_data(&root.join(rel)));
+            .any(|rel| blas_library_has_data(&join_relative(root, rel)));
     has_hip && (has_hipblas || has_rocblas) && rocblas_data_ok && hipblaslt_data_ok
 }
 
@@ -710,7 +711,7 @@ pub(super) fn copy_backend_runtime_dependencies_from_roots_with_context(
             ]);
         }
         for (relative, target_relative) in library_directories {
-            let directory = root.join(relative);
+            let directory = join_relative(root, relative);
             let Ok(entries) = fs::read_dir(&directory) else {
                 continue;
             };
@@ -736,7 +737,7 @@ pub(super) fn copy_backend_runtime_dependencies_from_roots_with_context(
                     ));
                 }
                 found += 1;
-                let target_directory = destination.join(target_relative);
+                let target_directory = join_relative(destination, target_relative);
                 let target = target_directory.join(entry.file_name());
                 if target.exists() {
                     if backend == "rocm" && sha256_file(&target)? != sha256_file(&path)? {
@@ -769,11 +770,11 @@ pub(super) fn copy_backend_runtime_dependencies_from_roots_with_context(
                 ("share/therock", "share/therock"),
                 ("share/doc", "share/doc"),
             ] {
-                let source = root.join(relative);
+                let source = join_relative(root, relative);
                 if !source.is_dir() {
                     continue;
                 }
-                let target = destination.join(target_name);
+                let target = join_relative(destination, target_name);
                 copy_runtime_tree(&source, &target, cancel)?;
                 found_data = found_data.saturating_add(count_files_recursive(&target));
             }

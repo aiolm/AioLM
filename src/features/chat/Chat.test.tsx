@@ -1411,12 +1411,12 @@ describe('saved names for running chat targets', () => {
     const picker = await screen.findByLabelText("Session for converting audio to text");
     fireEvent.click(picker);
     const fileOption = await screen.findByRole('option', { name: 'My local speech engine · whisper-large-v3.gguf' });
-    expect(fileOption).toHaveAttribute('title', 'C:/models/whisper-large-v3-00001-of-00004.gguf');
+    expect(fileOption).toHaveAttribute('title', String.raw`C:\models\whisper-large-v3-00001-of-00004.gguf`);
     const orgOption = await screen.findByRole('option', { name: `Cloud speech engine · ${modelLabel}` });
     expect(orgOption).toBeInTheDocument();
     fireEvent.click(fileOption);
     expect(picker).toHaveTextContent('My local speech engine · whisper-large-v3.gguf');
-    expect(picker).toHaveAttribute('title', 'C:/models/whisper-large-v3-00001-of-00004.gguf');
+    expect(picker).toHaveAttribute('title', String.raw`C:\models\whisper-large-v3-00001-of-00004.gguf`);
     fireEvent.click(picker);
     fireEvent.click(await screen.findByRole('option', { name: `Cloud speech engine · ${modelLabel}` }));
     expect(picker).toHaveTextContent(`Cloud speech engine · ${modelLabel}`);

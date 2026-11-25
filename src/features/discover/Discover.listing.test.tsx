@@ -183,7 +183,7 @@ describe("Discover listing and installed files", () => {
     fireEvent.click(await screen.findByRole("button", { name: /owner\/model/ }));
     const present = await screen.findByRole("button", { name: "Installed: model.Q4_K_M.gguf" });
     expect(present).toBeDisabled();
-    expect(present).toHaveAttribute("title", "Already downloaded to D:/library/hf/owner/model/model.Q4_K_M.gguf");
+    expect(present).toHaveAttribute("title", String.raw`Already downloaded to D:\library\hf\owner\model\model.Q4_K_M.gguf`);
     expect(screen.getByRole("button", { name: "Download: model.Q8_0.gguf" })).toBeEnabled();
     // The lookup is scoped to the configured destination, not a fixed folder.
     expect(api.hfInstalledFiles).toHaveBeenCalledWith("owner/model", ["model.Q4_K_M.gguf", "model.Q8_0.gguf"], "D:/library");

@@ -36,6 +36,7 @@ mod personalization;
 mod process_output;
 mod procutil;
 pub mod providers;
+mod relative_path;
 mod resource_estimate;
 pub mod runtime;
 pub mod server;

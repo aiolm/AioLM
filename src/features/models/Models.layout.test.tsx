@@ -191,7 +191,7 @@ describe("model library loaded path identity", () => {
     const button = await screen.findByRole("button", { name: "Configure & run: Example.gguf" });
     const row = within(button.closest<HTMLElement>('[role="listitem"]')!);
     expect(row.getByText("Running")).toBeVisible();
-    expect(button).toHaveAttribute("title", path);
+    expect(button).toHaveAttribute("title", String.raw`C:\Models\Example.gguf`);
     expect(base.cfg?.active_model).toBe("C:/Models/Other.gguf");
     expect(base.updateConfig).not.toHaveBeenCalled();
   });
@@ -217,7 +217,7 @@ describe("model library loaded path identity", () => {
     expect(api.deleteModel).not.toHaveBeenCalled();
     fireEvent.click(button);
     expect(select).toHaveBeenCalledWith(expect.objectContaining({ path: first, shards: { files, total: 2, missing: [] } }));
-    expect(button).toHaveAttribute("title", first);
+    expect(button).toHaveAttribute("title", String.raw`C:\Models\Shard-00001-of-00002.gguf`);
     expect(model.shards.files).toEqual([first, "C:/Models/Shard-00002-of-00002.gguf"]);
   });
 });

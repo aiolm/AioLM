@@ -600,6 +600,7 @@ fn locate_cmake() -> Option<PathBuf> {
         ]
         .into_iter()
         .flatten()
+        // path-separator: allow (macOS only)
         .map(|root| root.join("CMake.app/Contents/bin/cmake"))
         .find(|path| path.is_file())
     }

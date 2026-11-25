@@ -1180,7 +1180,7 @@ pub fn inspect_snapshot(dir: &Path) -> ModelArtifact {
             incomplete |= !manifest.complete;
             let root = dir.canonicalize().ok();
             for file in &manifest.files {
-                let path = dir.join(&file.path);
+                let path = crate::relative_path::join_relative(dir, &file.path);
                 let contained = root.as_ref().is_some_and(|root| {
                     path.canonicalize()
                         .is_ok_and(|resolved| resolved.starts_with(root))

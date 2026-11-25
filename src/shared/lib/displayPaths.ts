@@ -1,11 +1,23 @@
 // Apply at presentation boundaries (including tooltips, diagnostics and copied paths).
 // Keep stored paths and command arguments intact: Windows file access can need the prefix.
 export function normalizeDisplayPath(value: string): string {
-  const path = value.trim();
+  const path = stripVerbatimPrefix(value.trim());
+  // Windows accepts either separator, so a folder joined with a relative path such as
+  // `hf/owner/model` reads `C:\models\hf/owner/model`. Drive and UNC paths show `\` only;
+  // POSIX paths, URLs and model IDs keep their `/`.
+  return isWindowsAbsolutePath(path) ? path.replace(/\//g, "\\") : path;
+}
+
+function stripVerbatimPrefix(path: string): string {
   const lower = path.toLowerCase();
   if (lower.startsWith("\\\\?\\unc\\")) return `\\\\${path.slice(8)}`;
   if (lower.startsWith("\\\\?\\")) return path.slice(4);
   return path;
+}
+
+/** Drive-letter (`C:\`, `C:/`) and UNC (`\\server\share`) paths. `//host` stays POSIX/URL. */
+function isWindowsAbsolutePath(path: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(path) || /^\\\\[^\\/?.]/.test(path);
 }
 
 /** POSIX absolute paths are case sensitive; retain existing Windows and legacy relative keys. */
