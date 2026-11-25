@@ -40,14 +40,22 @@
 //! Qwen3-Next, Qwen3.5 and Qwen4 hybrids cache only full-attention layers;
 //! recurrent layers hold F32 convolution and delta-net state per sequence.
 //! Qwen4 also holds an indexer key cache and optional PLE convolution state.
-//! Other recurrent, sliding-window and MLA layouts remain unsupported.
+//! Sliding-window layers keep `min(cells, pad256(n_swa * streams + n_ubatch))`
+//! cells per stream as `llama_kv_cache_iswa` does, unless `--swa-full`.
+//!
+//! An estimate is always produced once the main model's files are on disk.
+//! What the formulas above cannot follow lowers [`Accuracy`] instead of
+//! removing the figures: ignored advanced options and auxiliary models sized
+//! from their files are `Approximate`; a main model whose layout is not
+//! modeled (other recurrent, MLA, shared-KV or looped layouts, or incomplete
+//! metadata) uses a generic full-attention shape and is `Rough`.
 //! Model files on disk are shown separately from SSD offload. Offload is the
 //! model/cache working set left outside VRAM; fixed host process memory and
 //! the runtime's always-host token embedding are excluded. Capacity overflow
 //! describes required offload and does not silently change launch settings.
 
 use crate::config::{AppConfig, SplitMode};
-use crate::gguf::{self, ModelFacts, TensorBytes};
+use crate::gguf::{self, LayerBytes, ModelFacts, PerLayer, TensorBytes};
 use crate::hardware::{self, GpuVendor};
 use crate::tuning_defaults;
 use serde::Serialize;
@@ -81,6 +89,14 @@ const MAX_ADAPTERS: usize = 32;
 const MAX_SERVER_ARGS: usize = 512;
 const MAX_SHARDS: usize = 1_024;
 const MAX_CACHED_FACTS: usize = 64;
+/// Generic-shape defaults when a header does not state a dimension.
+const GENERIC_LAYERS: usize = 32;
+const GENERIC_EMBD: u64 = 4_096;
+const GENERIC_HEAD: u64 = 128;
+const GENERIC_CTX: u64 = 4_096;
+const GENERIC_ROPE: u64 = 64;
+/// Largest header dimension used as a size.
+const MAX_DIM: u64 = 1 << 24;
 
 mod capacity;
 
@@ -142,6 +158,22 @@ pub enum EstimateNote {
     DiskOffload,
     /// Eligible PLE weights are explicitly read on demand from disk.
     LazyOffload,
+    /// Prompt caches or context checkpoints grow at runtime, outside the load.
+    RuntimeCache,
+    /// A draft model or adapter is sized from its files with a generic layout.
+    AuxiliaryFallback,
+}
+
+/// How closely the figures follow the configured launch.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum Accuracy {
+    /// Every setting that moves memory is modeled.
+    Standard,
+    /// The main model is modeled; some options or auxiliary files are not.
+    Approximate,
+    /// The main model uses a generic shape or its file size.
+    Rough,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -158,6 +190,8 @@ pub struct ResourceEstimate {
     pub model_bytes: u64,
     pub auxiliary_bytes: u64,
     pub kv_bytes: Option<u64>,
+    /// `None` only when there are no memory figures (no main model on disk).
+    pub accuracy: Option<Accuracy>,
     pub notes: Vec<EstimateNote>,
 }
 
@@ -175,6 +209,7 @@ struct MemoryEstimate {
     pub notes: Vec<EstimateNote>,
     pub cpu_offload_bytes: Option<u64>,
     pub lazy_offload_bytes: u64,
+    pub accuracy: Option<Accuracy>,
 }
 
 /// Which devices the selected runtime can place weights on.
@@ -373,6 +408,10 @@ struct ServerArgs {
     draft_type_v: Option<KvType>,
     draft_cpu_moe: bool,
     draft_n_cpu_moe: u64,
+    /// `--swa-full`: sliding-window layers keep the whole context.
+    swa_full: bool,
+    /// A prompt cache or context checkpoints that grow after loading.
+    runtime_cache: bool,
     /// An argument moves or adds memory in a way the estimate cannot follow.
     unmodeled: bool,
     /// An argument this estimate does not recognise.
@@ -395,6 +434,8 @@ impl Default for ServerArgs {
             draft_type_v: None,
             draft_cpu_moe: false,
             draft_n_cpu_moe: 0,
+            swa_full: false,
+            runtime_cache: false,
             unmodeled: false,
             unknown: false,
         }
@@ -435,7 +476,6 @@ const NEUTRAL_ARGS: &[&str] = &[
     "-n",
     "--predict",
     "--n-predict",
-    "--swa-full",
     "-cms",
     "--checkpoint-min-step",
     "--context-shift",
@@ -581,14 +621,8 @@ const NEUTRAL_PREFIXES: &[&str] = &[
 /// predict: tensor overrides, metadata overrides, remote devices, downloads
 /// and presets that pick their own models, and pooled output modes.
 const UNMODELED_ARGS: &[&str] = &[
-    // These can retain additional host/device buffers or change resident weight
-    // copies. A load estimate cannot silently ignore an explicit override.
-    "--cache-ram",
-    "-cram",
-    "--cache-idle-slots",
-    "--ctx-checkpoints",
-    "-ctxcp",
-    "--swa-checkpoints",
+    // These can change resident weight copies. The estimate still runs and
+    // reports that the override was not followed.
     "--load-mode",
     "-lm",
     "--lazy-mode",
@@ -697,6 +731,18 @@ fn parse_server_args(raw: &[String]) -> ServerArgs {
             "--mmproj-offload" => args.mmproj_offload = true,
             "--no-mmproj-offload" => args.mmproj_offload = false,
             "-mmdev" | "--mmproj-device" => args.mmproj_offload = value() != Some("none"),
+            "-swafull" | "--swa-full" => args.swa_full = true,
+            "--no-swa-full" => args.swa_full = false,
+            // Prompt caches and checkpoints fill while serving, so they are
+            // outside a load estimate. A zero limit disables them.
+            "-cram" | "--cache-ram" | "-ctxcp" | "--ctx-checkpoints" | "--swa-checkpoints" => {
+                args.runtime_cache |= count(value()) != Some(0);
+            }
+            "--cache-idle-slots" => {
+                args.runtime_cache = true;
+                value();
+            }
+            "--no-cache-idle-slots" => {}
             "--op-offload" => args.op_offload = true,
             "--no-op-offload" => args.op_offload = false,
             "-lzm" | "--lazy-mode" => match value() {
@@ -867,7 +913,9 @@ struct FoundModel {
 enum Loaded {
     Ready(FoundModel),
     Missing,
-    Unreadable,
+    /// No architecture could be read; whatever the header did state is kept
+    /// for a generic estimate.
+    Unreadable(FoundModel),
 }
 
 /// Unique files counted once towards disk use.
@@ -1071,7 +1119,10 @@ fn load_model(path: &str, disk: &mut Disk, auxiliary: bool) -> Loaded {
     match first {
         _ if missing => Loaded::Missing,
         Some(facts) if facts.architecture.is_some() => Loaded::Ready(FoundModel { facts, tensors }),
-        _ => Loaded::Unreadable,
+        facts => Loaded::Unreadable(FoundModel {
+            facts: facts.unwrap_or_default(),
+            tensors,
+        }),
     }
 }
 
@@ -1142,6 +1193,9 @@ struct Shape {
     /// `n_embd_k_gqa(il)` and `n_embd_v_gqa(il)`.
     k_dims: Vec<u64>,
     v_dims: Vec<u64>,
+    /// Layers whose cache holds only the sliding window, and its width.
+    swa_layers: Vec<bool>,
+    n_swa: u64,
     /// F32 recurrent state bytes per sequence, indexed by layer; zero on
     /// full-attention layers. Includes optional Qwen4 PLE convolution history.
     recurrent_bytes: Vec<u64>,
@@ -1151,9 +1205,66 @@ struct Shape {
     n_ff: u64,
     n_ctx_train: Option<u64>,
     tensors: TensorBytes,
+    /// `Approximate` when part of the layout is assumed (an unknown sliding
+    /// window pattern); `Rough` for [`generic_shape`].
+    accuracy: Accuracy,
 }
 
-fn shape(model: FoundModel) -> Result<Shape, EstimateNote> {
+/// Sliding-window layers and the window width, as llama.cpp's `load_hparams`
+/// sets them: the header's per-layer flags (`get_key_or_arr`), or the fixed
+/// period an architecture passes to `set_swa_pattern` (the last layer of each
+/// period uses full attention). The flag is `false` when a window is declared
+/// without a layout this estimate knows; every layer is then treated as full
+/// attention, which overstates the cache instead of understating it.
+fn swa_layout(facts: &ModelFacts, n_layer: usize) -> (Vec<bool>, u64, bool) {
+    let none = || vec![false; n_layer];
+    let Some(window) = facts
+        .sliding_window
+        .filter(|window| (1..=MAX_DIM).contains(window))
+    else {
+        return (none(), 0, true);
+    };
+    let period = |n: usize| -> Vec<bool> { (0..n_layer).map(|il| il % n < n - 1).collect() };
+    let layers = match &facts.sliding_window_pattern {
+        Some(PerLayer::Layers(flags)) if flags.len() >= n_layer => {
+            Some(flags[..n_layer].iter().map(|flag| *flag != 0).collect())
+        }
+        Some(PerLayer::Layers(_)) => None,
+        Some(PerLayer::Uniform(flag)) => Some(vec![*flag != 0; n_layer]),
+        None => match facts.architecture.as_deref() {
+            Some("gemma2" | "gpt-oss") => Some(period(2)),
+            Some("cohere2") => Some(period(4)),
+            Some("gemma3") => Some(period(6)),
+            _ => None,
+        },
+    };
+    match layers {
+        Some(layers) => (layers, window, true),
+        None => (none(), 0, false),
+    }
+}
+
+/// The widest per-token FFN activation, dense or routed.
+fn ffn_width(facts: &ModelFacts, n_embd: u64) -> u64 {
+    let dense = facts.feed_forward_length.as_ref().map_or(0, |ff| ff.max());
+    let routed = facts
+        .expert_feed_forward_length
+        .as_ref()
+        .map_or(0, |ff| ff.max())
+        .saturating_mul(
+            facts
+                .expert_used_count
+                .as_ref()
+                .map_or(0, |used| used.max()),
+        )
+        .saturating_add(facts.expert_shared_feed_forward_length.unwrap_or(0));
+    match dense.max(routed).min(MAX_DIM) {
+        0 => n_embd.saturating_mul(4),
+        width => width,
+    }
+}
+
+fn shape(model: &FoundModel) -> Result<Shape, EstimateNote> {
     let facts = &model.facts;
     let architecture = facts.architecture.as_deref().unwrap_or_default();
     let qwen_hybrid = matches!(
@@ -1163,7 +1274,6 @@ fn shape(model: FoundModel) -> Result<Shape, EstimateNote> {
     if UNSUPPORTED_ARCHITECTURES.contains(&architecture)
         || ((facts.recurrent_state || facts.recurrent_layers.is_some()) && !qwen_hybrid)
         || facts.kv_lora_rank.is_some()
-        || facts.sliding_window.is_some_and(|window| window > 0)
     {
         return Err(EstimateNote::UnsupportedArchitecture);
     }
@@ -1187,11 +1297,10 @@ fn shape(model: FoundModel) -> Result<Shape, EstimateNote> {
         .head_count
         .as_ref()
         .ok_or(EstimateNote::MissingMetadata)?;
-    let tensors = model.tensors.ok_or(EstimateNote::MissingMetadata)?;
-    // Header dimensions are untrusted sizes, not allocations to honour. Reject
-    // incomplete layer arrays and implausible shapes instead of manufacturing
-    // an MHA fallback or overflowing arithmetic later in the estimate.
-    const MAX_DIM: u64 = 1 << 24;
+    let tensors = model.tensors.clone().ok_or(EstimateNote::MissingMetadata)?;
+    // Header dimensions are untrusted sizes, not allocations to honour. An
+    // incomplete layer array or implausible shape takes the generic path
+    // instead of manufacturing an MHA fallback or overflowing arithmetic.
     if n_embd > MAX_DIM
         || tensors.layers.len() != n_layer
         || tensors.layers.iter().any(|layer| layer.total() == 0)
@@ -1243,22 +1352,7 @@ fn shape(model: FoundModel) -> Result<Shape, EstimateNote> {
     let v_dims = (0..n_layer)
         .map(|il| head_v.saturating_mul(kv_heads(il)))
         .collect();
-    let dense = facts.feed_forward_length.as_ref().map_or(0, |ff| ff.max());
-    let routed = facts
-        .expert_feed_forward_length
-        .as_ref()
-        .map_or(0, |ff| ff.max())
-        .saturating_mul(
-            facts
-                .expert_used_count
-                .as_ref()
-                .map_or(0, |used| used.max()),
-        )
-        .saturating_add(facts.expert_shared_feed_forward_length.unwrap_or(0));
-    let n_ff = match dense.max(routed) {
-        0 => n_embd.saturating_mul(4),
-        width => width,
-    };
+    let (swa_layers, n_swa, swa_known) = swa_layout(facts, n_layer);
     Ok(Shape {
         n_layer,
         kv_layers,
@@ -1268,13 +1362,172 @@ fn shape(model: FoundModel) -> Result<Shape, EstimateNote> {
         head_v,
         k_dims,
         v_dims,
+        swa_layers,
+        n_swa,
         recurrent_bytes,
         indexer_dim,
         activation_width,
-        n_ff,
+        n_ff: ffn_width(facts, n_embd),
         n_ctx_train: facts.context_length.filter(|value| *value > 0),
         tensors,
+        accuracy: if swa_known {
+            Accuracy::Standard
+        } else {
+            Accuracy::Approximate
+        },
     })
+}
+
+/// A full-attention stand-in for layouts [`shape`] does not model: header
+/// values where they are plausible, generic defaults otherwise. Weights keep
+/// their measured bytes, or the file size when the tensor table is
+/// unreadable, spread evenly over the declared layer count (looped models
+/// declare more layers than they store). Every layer with attention heads
+/// gets a cache, so other recurrent, shared-KV and looped layouts overstate
+/// rather than understate it. MLA layers cache the latent rank plus the
+/// rotary dimensions, as llama.cpp's MLA path does.
+fn generic_shape(model: &FoundModel, file_bytes: u64) -> Shape {
+    let facts = &model.facts;
+    let plausible = |value: Option<u64>| value.filter(|n| (1..=MAX_DIM).contains(n));
+    let measured = model
+        .tensors
+        .as_ref()
+        .map_or(0, |tensors| tensors.layers.len());
+    let n_layer = facts
+        .block_count
+        .and_then(|count| usize::try_from(count).ok())
+        .filter(|count| (1..=gguf::MAX_MODEL_LAYERS).contains(count))
+        .or((measured > 0).then_some(measured))
+        .unwrap_or(GENERIC_LAYERS);
+    let tensors = match &model.tensors {
+        Some(tensors) if tensors.total() > 0 => spread_layers(tensors, n_layer),
+        _ => file_tensors(file_bytes, n_layer),
+    };
+    let n_embd = plausible(facts.embedding_length).unwrap_or(GENERIC_EMBD);
+    let kv_layers = match facts.nextn_layers {
+        Some(nextn) if nextn < n_layer as u64 => n_layer - nextn as usize,
+        _ => n_layer,
+    };
+    let qwen_hybrid = matches!(
+        facts.architecture.as_deref(),
+        Some("qwen3next" | "qwen35" | "qwen35moe" | "qwen4exp")
+    );
+    let (recurrent_bytes, indexer_dim, activation_width) =
+        hybrid_dimensions(facts, n_layer, kv_layers, n_embd, qwen_hybrid)
+            .unwrap_or_else(|_| (vec![0; n_layer], 0, n_embd));
+    let heads_at = |il: usize| {
+        facts
+            .head_count
+            .as_ref()
+            .and_then(|heads| heads.at(il))
+            .filter(|n| *n <= MAX_DIM)
+    };
+    let first_heads = plausible(heads_at(0)).unwrap_or((n_embd / GENERIC_HEAD).max(1));
+    let head_k = plausible(facts.key_length).unwrap_or((n_embd / first_heads).max(1));
+    let head_v = plausible(facts.value_length).unwrap_or(head_k);
+    let kv_heads = |il: usize| {
+        facts
+            .head_count_kv
+            .as_ref()
+            .and_then(|kv| kv.at(il))
+            .filter(|n| *n <= MAX_DIM)
+            .or_else(|| heads_at(il))
+            .unwrap_or(first_heads)
+    };
+    let (k_dims, v_dims): (Vec<u64>, Vec<u64>) = match plausible(facts.kv_lora_rank) {
+        Some(rank) => {
+            let rope = plausible(facts.rope_dimension_count).unwrap_or(GENERIC_ROPE);
+            (0..n_layer)
+                .map(|il| {
+                    if kv_heads(il) == 0 {
+                        (0, 0)
+                    } else {
+                        (rank.saturating_add(rope), rank)
+                    }
+                })
+                .unzip()
+        }
+        None => (0..n_layer)
+            .map(|il| {
+                let n = kv_heads(il);
+                (head_k.saturating_mul(n), head_v.saturating_mul(n))
+            })
+            .unzip(),
+    };
+    let (swa_layers, n_swa, _) = swa_layout(facts, n_layer);
+    let n_head = (0..n_layer)
+        .filter_map(|il| plausible(heads_at(il)))
+        .max()
+        .unwrap_or(first_heads);
+    Shape {
+        n_layer,
+        kv_layers,
+        n_embd,
+        n_vocab: plausible(tensors.vocab.or(facts.vocab_size)),
+        n_head,
+        head_v,
+        k_dims,
+        v_dims,
+        swa_layers,
+        n_swa,
+        recurrent_bytes,
+        indexer_dim,
+        activation_width,
+        n_ff: ffn_width(facts, n_embd),
+        n_ctx_train: facts.context_length.filter(|value| *value > 0),
+        tensors,
+        accuracy: Accuracy::Rough,
+    }
+}
+
+/// Spreads `bytes` evenly over `n` values, the remainder on the first.
+fn spread(bytes: u64, n: usize) -> impl Iterator<Item = u64> {
+    let n = n.max(1) as u64;
+    let (each, rest) = (bytes / n, bytes % n);
+    (0..n).map(move |index| if index == 0 { each + rest } else { each })
+}
+
+/// The same tensors with their repeating-layer bytes spread over `n_layer`
+/// layers, so placement can follow `n_gpu_layers` over the declared count.
+fn spread_layers(tensors: &TensorBytes, n_layer: usize) -> TensorBytes {
+    if tensors.layers.len() == n_layer && tensors.layers.iter().all(|layer| layer.total() > 0) {
+        return tensors.clone();
+    }
+    let sum = |part: fn(&LayerBytes) -> u64| {
+        tensors
+            .layers
+            .iter()
+            .fold(0u64, |total, layer| total.saturating_add(part(layer)))
+    };
+    let experts = spread(sum(|layer| layer.experts), n_layer);
+    let dense = spread(sum(|layer| layer.dense_ffn), n_layer);
+    let other = spread(sum(|layer| layer.other), n_layer);
+    TensorBytes {
+        layers: experts
+            .zip(dense)
+            .zip(other)
+            .map(|((experts, dense_ffn), other)| LayerBytes {
+                experts,
+                dense_ffn,
+                other,
+            })
+            .collect(),
+        ..tensors.clone()
+    }
+}
+
+/// Repeating layers that together hold `bytes`, for files whose tensor table
+/// could not be read.
+fn file_tensors(bytes: u64, n_layer: usize) -> TensorBytes {
+    TensorBytes {
+        layers: spread(bytes, n_layer)
+            .map(|other| LayerBytes {
+                other,
+                ..LayerBytes::default()
+            })
+            .collect(),
+        ..TensorBytes::default()
+    }
 }
 
 /// llama-hparams.cpp::n_embd_r/n_embd_s and llama-memory-recurrent.cpp
@@ -1457,12 +1710,44 @@ fn kv_cells(n_ctx: u64, n_seq: u64, unified: bool) -> (u64, u64) {
     }
 }
 
+/// Cache cells over every stream for full-attention and sliding-window layers.
+#[derive(Clone, Copy, Debug)]
+struct Cells {
+    full: u64,
+    swa: u64,
+}
+
+/// `llama_kv_cache_iswa`: a sliding-window cache keeps
+/// `pad256(n_swa * (unified ? n_seq : 1) + n_ubatch)` cells per stream, never
+/// more than the full cache, unless `--swa-full` keeps the whole context.
+fn cache_cells(shape: &Shape, scenario: &Scenario, launch: &Launch) -> (u64, Cells) {
+    let (per_stream, streams) = kv_cells(scenario.n_ctx, scenario.n_seq, scenario.unified);
+    let swa_per_stream = if shape.n_swa == 0 || launch.args.swa_full {
+        per_stream
+    } else {
+        let sequences = if scenario.unified { scenario.n_seq } else { 1 };
+        per_stream.min(pad256(
+            shape
+                .n_swa
+                .saturating_mul(sequences)
+                .saturating_add(launch.ubatch),
+        ))
+    };
+    (
+        per_stream,
+        Cells {
+            full: per_stream.saturating_mul(streams),
+            swa: swa_per_stream.saturating_mul(streams),
+        },
+    )
+}
+
 /// KV bytes of layers `from..to` as (CPU, GPU).
 #[allow(clippy::too_many_arguments)]
 fn kv_bytes(
     shape: &Shape,
     layers: std::ops::Range<usize>,
-    cells: u64,
+    cells: Cells,
     type_k: KvType,
     type_v: KvType,
     flash_attn: bool,
@@ -1479,6 +1764,11 @@ fn kv_bytes(
             shape.v_dims[il]
         } else {
             widest_v
+        };
+        let cells = if shape.swa_layers[il] {
+            cells.swa
+        } else {
+            cells.full
         };
         let bytes = type_k
             .row_bytes(shape.k_dims[il])
@@ -1629,11 +1919,11 @@ fn context_memory(
     // use llama.cpp's f16 baseline and identify the assumption in the notes.
     let pick = |known: Option<KvType>| known.unwrap_or(KvType::F16);
     let (type_k, type_v) = (pick(plan.type_k), pick(plan.type_v));
-    let (per_stream, streams) = kv_cells(scenario.n_ctx, scenario.n_seq, scenario.unified);
+    let (per_stream, cells) = cache_cells(plan.shape, scenario, launch);
     let (kv_cpu, kv_gpu) = kv_bytes(
         plan.shape,
         0..plan.shape.kv_layers,
-        per_stream.saturating_mul(streams),
+        cells,
         type_k,
         type_v,
         scenario.flash_attn,
@@ -1773,20 +2063,26 @@ fn context_memory(
 
 /// One current-runtime placement. Unknown defaults use documented baselines,
 /// never a fictional CPU-only branch or all-experts-on-CPU lower bound.
-fn scenario(launch: &Launch, main: &Shape, accelerator: Accelerator) -> Option<Scenario> {
+/// The flag is set when the trained context was requested but the header does
+/// not state it, and a generic context stands in.
+fn scenario(launch: &Launch, main: &Shape, accelerator: Accelerator) -> (Scenario, bool) {
     let n_seq = launch.parallel.unwrap_or(AUTO_SLOTS);
-    Some(Scenario {
-        gpu: !matches!(accelerator, Accelerator::Cpu),
-        offload: Offload::OutputFirst,
-        flash_attn: launch.flash_attn.unwrap_or(true),
-        n_seq,
-        unified: launch.args.kv_unified.unwrap_or(launch.parallel.is_none()),
-        n_ctx: if launch.ctx > 0 {
-            launch.ctx
-        } else {
-            main.n_ctx_train?.saturating_mul(n_seq)
+    let trained = (launch.ctx == 0).then_some(main.n_ctx_train);
+    let n_ctx = match trained {
+        None => launch.ctx,
+        Some(trained) => trained.unwrap_or(GENERIC_CTX).saturating_mul(n_seq),
+    };
+    (
+        Scenario {
+            gpu: !matches!(accelerator, Accelerator::Cpu),
+            offload: Offload::OutputFirst,
+            flash_attn: launch.flash_attn.unwrap_or(true),
+            n_seq,
+            unified: launch.args.kv_unified.unwrap_or(launch.parallel.is_none()),
+            n_ctx,
         },
-    })
+        trained.is_some_and(|trained| trained.is_none()),
+    )
 }
 
 /// Parses `--spec-draft-ngl`: `auto` and `all` offload every layer
@@ -1801,34 +2097,60 @@ fn draft_layers(cfg: &AppConfig) -> u64 {
     cfg.spec_draft_ngl.trim().parse::<u64>().unwrap_or(u64::MAX)
 }
 
-pub fn estimate(cfg: &AppConfig, env: &Environment) -> ResourceEstimate {
-    if crate::providers::provider_of(cfg) != crate::providers::ProviderId::Llama {
-        // Python providers can also load a single GGUF (including Metal).
-        // Artifact inspection accounts for the selected format without using
-        // llama.cpp's placement or KV formulas for another engine.
-        let path = Path::new(&cfg.active_model);
-        let artifact = crate::providers::execution::inspect(path)
-            .unwrap_or_else(|_| crate::providers::artifacts::inspect_snapshot(path));
-        return ResourceEstimate {
-            vram_bytes: None,
-            ram_offload_bytes: None,
-            ssd_offload_bytes: None,
-            required_vram_bytes: None,
-            host_memory_bytes: None,
-            vram_capacity_bytes: env.vram_capacity_bytes,
-            ram_capacity_bytes: env.ram_capacity_bytes,
-            disk_bytes: artifact.size_bytes,
-            disk_complete: artifact.ready_files(),
-            model_bytes: artifact.size_bytes,
-            auxiliary_bytes: 0,
-            kv_bytes: None,
-            notes: vec![
-                EstimateNote::UnsupportedArchitecture,
-                EstimateNote::Automatic,
-            ],
-        };
+/// Python providers (vLLM, MLX; either can also load a single GGUF) manage
+/// their own placement and caches. Without llama.cpp's formulas the weights
+/// are their stored size, on the selected accelerator, plus the fixed runtime
+/// allowances; caches the engine sizes for itself are not counted.
+fn provider_memory(cfg: &AppConfig, env: &Environment) -> MemoryEstimate {
+    let path = Path::new(&cfg.active_model);
+    let artifact = crate::providers::execution::inspect(path)
+        .unwrap_or_else(|_| crate::providers::artifacts::inspect_snapshot(path));
+    let weights = artifact.size_bytes;
+    let mut notes = vec![
+        EstimateNote::UnsupportedArchitecture,
+        EstimateNote::Automatic,
+    ];
+    if !artifact.ready_files() {
+        notes.push(EstimateNote::MissingFiles);
     }
-    let memory = estimate_memory(cfg, env);
+    let gpu = !matches!(env.accelerator, Accelerator::Cpu);
+    let (ram, vram, cpu_offload) = if weights == 0 {
+        (None, None, None)
+    } else if gpu {
+        (
+            Some(RAM_BASE.add(GPU_HOST_RUNTIME)),
+            Some(ResourceRange::exact(weights).add(GPU_DEVICE_RUNTIME)),
+            Some(0),
+        )
+    } else {
+        (
+            Some(RAM_BASE.add(ResourceRange::exact(weights))),
+            Some(ResourceRange::default()),
+            Some(weights),
+        )
+    };
+    MemoryEstimate {
+        accuracy: ram.map(|_| Accuracy::Rough),
+        ram,
+        vram,
+        disk_bytes: weights,
+        disk_complete: artifact.ready_files(),
+        model_bytes: weights,
+        auxiliary_bytes: 0,
+        kv_bytes: None,
+        ram_capacity_bytes: env.ram_capacity_bytes,
+        notes,
+        cpu_offload_bytes: cpu_offload,
+        lazy_offload_bytes: 0,
+    }
+}
+
+pub fn estimate(cfg: &AppConfig, env: &Environment) -> ResourceEstimate {
+    let memory = if crate::providers::provider_of(cfg) == crate::providers::ProviderId::Llama {
+        estimate_memory(cfg, env)
+    } else {
+        provider_memory(cfg, env)
+    };
     let mut notes: BTreeSet<_> = memory.notes.iter().copied().collect();
     let required_vram_bytes = memory.vram.map(ResourceRange::planned);
     let host_memory_bytes = memory
@@ -1885,8 +2207,10 @@ pub fn estimate(cfg: &AppConfig, env: &Environment) -> ResourceEstimate {
                 notes.insert(EstimateNote::DiskOffload);
             }
         } else {
-            // A RAM/SSD split cannot be inferred without a RAM budget.
-            ram_offload_bytes = None;
+            // Without a RAM budget nothing is known to spill to disk: show the
+            // whole offload as RAM and say the split is uncertain.
+            ram_offload_bytes = Some(offload);
+            ssd_offload_bytes = Some(memory.lazy_offload_bytes);
             notes.insert(EstimateNote::CapacityUnknown);
         }
     }
@@ -1908,6 +2232,7 @@ pub fn estimate(cfg: &AppConfig, env: &Environment) -> ResourceEstimate {
         model_bytes: memory.model_bytes,
         auxiliary_bytes: memory.auxiliary_bytes,
         kv_bytes: memory.kv_bytes,
+        accuracy: memory.accuracy,
         notes: notes.into_iter().collect(),
     }
 }
@@ -1919,18 +2244,36 @@ fn estimate_memory(cfg: &AppConfig, env: &Environment) -> MemoryEstimate {
         ..Disk::default()
     };
     let launch = launch_settings(cfg);
-    let mut blocked = false;
+    let mut accuracy = Accuracy::Standard;
+    let lower = |accuracy: &mut Accuracy, to: Accuracy| *accuracy = (*accuracy).max(to);
 
+    // Only a main model that is not on disk leaves no figures: everything
+    // else the formulas cannot follow lowers the accuracy instead.
     let main = if cfg.active_model.trim().is_empty() {
         disk.complete = false;
         None
     } else {
+        let before = disk.model;
         match load_model(&cfg.active_model, &mut disk, false) {
-            Loaded::Ready(model) => Some(model),
+            Loaded::Ready(model) => Some(match shape(&model) {
+                Ok(shape) => {
+                    if shape.accuracy > Accuracy::Standard {
+                        notes.insert(EstimateNote::UnsupportedArchitecture);
+                    }
+                    lower(&mut accuracy, shape.accuracy);
+                    shape
+                }
+                Err(note) => {
+                    notes.insert(note);
+                    lower(&mut accuracy, Accuracy::Rough);
+                    generic_shape(&model, disk.model.saturating_sub(before))
+                }
+            }),
             Loaded::Missing => None,
-            Loaded::Unreadable => {
+            Loaded::Unreadable(model) => {
                 notes.insert(EstimateNote::MissingMetadata);
-                None
+                lower(&mut accuracy, Accuracy::Rough);
+                Some(generic_shape(&model, disk.model.saturating_sub(before)))
             }
         }
     };
@@ -1958,8 +2301,9 @@ fn estimate_memory(cfg: &AppConfig, env: &Environment) -> MemoryEstimate {
         }
     }
 
-    // Enabled adapters follow the layers they adapt.
-    let mut adapters = Vec::new();
+    // Enabled adapters follow the layers they adapt. One without a readable
+    // tensor table keeps its file size, spread over the main model's layers.
+    let mut adapters: Vec<Result<TensorBytes, u64>> = Vec::new();
     if cfg
         .lora_adapters
         .iter()
@@ -1976,37 +2320,44 @@ fn estimate_memory(cfg: &AppConfig, env: &Environment) -> MemoryEstimate {
         .take(MAX_ADAPTERS)
     {
         notes.insert(EstimateNote::Auxiliary);
+        let before = disk.auxiliary;
         match load_model(&adapter.path, &mut disk, true) {
             Loaded::Ready(FoundModel {
                 tensors: Some(tensors),
                 ..
-            }) => adapters.push(tensors),
+            }) => adapters.push(Ok(tensors)),
             Loaded::Missing => {}
             _ => {
-                notes.insert(EstimateNote::MissingMetadata);
-                blocked = true;
+                notes.insert(EstimateNote::AuxiliaryFallback);
+                lower(&mut accuracy, Accuracy::Approximate);
+                adapters.push(Err(disk.auxiliary.saturating_sub(before)));
             }
         }
     }
 
-    // A draft model gets its own context of the same size.
+    // A draft model gets its own context of the same size. One whose layout
+    // is not modeled uses the generic shape.
     let speculative = tuning_defaults::speculative_enabled(cfg);
     let mut draft = None;
     if speculative && !cfg.spec_draft_model.trim().is_empty() {
         notes.insert(EstimateNote::Auxiliary);
-        match load_model(&cfg.spec_draft_model, &mut disk, true) {
-            Loaded::Ready(model) => match shape(model) {
-                Ok(shape) => draft = Some(shape),
-                Err(note) => {
-                    notes.insert(note);
-                    blocked = true;
-                }
-            },
-            Loaded::Missing => {}
-            Loaded::Unreadable => {
-                notes.insert(EstimateNote::MissingMetadata);
-                blocked = true;
-            }
+        let before = disk.auxiliary;
+        let model = match load_model(&cfg.spec_draft_model, &mut disk, true) {
+            Loaded::Ready(model) | Loaded::Unreadable(model) => Some(model),
+            Loaded::Missing => None,
+        };
+        if let Some(model) = model {
+            let modeled = model
+                .facts
+                .architecture
+                .as_ref()
+                .and_then(|_| shape(&model).ok())
+                .filter(|shape| shape.accuracy == Accuracy::Standard);
+            draft = Some(modeled.unwrap_or_else(|| {
+                notes.insert(EstimateNote::AuxiliaryFallback);
+                lower(&mut accuracy, Accuracy::Approximate);
+                generic_shape(&model, disk.auxiliary.saturating_sub(before))
+            }));
         }
     }
     // Multi-token prediction drafts from the model's own next-token layers.
@@ -2015,7 +2366,7 @@ fn estimate_memory(cfg: &AppConfig, env: &Environment) -> MemoryEstimate {
 
     if !disk.complete {
         notes.insert(EstimateNote::MissingFiles);
-        blocked = true;
+        lower(&mut accuracy, Accuracy::Approximate);
     }
     if launch.args.unmodeled
         || launch.args.unknown
@@ -2023,16 +2374,17 @@ fn estimate_memory(cfg: &AppConfig, env: &Environment) -> MemoryEstimate {
         || (!tuning_defaults::inherited(cfg, "cache_type_v") && launch.type_v.is_none())
         || matches!(cfg.gpu.split_mode, SplitMode::Row | SplitMode::Tensor)
     {
+        // Unfollowed options keep the configured placement and an f16 cache
+        // baseline; row/tensor splitting spreads the same bytes over devices.
         notes.insert(EstimateNote::AdvancedOptions);
-        blocked = true;
+        lower(&mut accuracy, Accuracy::Approximate);
+    }
+    if launch.args.runtime_cache {
+        notes.insert(EstimateNote::RuntimeCache);
     }
     // build_args always supplies n_gpu_layers (including the app default).
     // Upstream fit.cpp does not redistribute experts once it is explicit.
 
-    let main_shape = main.map(shape);
-    if let Some(Err(note)) = &main_shape {
-        notes.insert(*note);
-    }
     let draft_types = (launch.args.draft_type_k, launch.args.draft_type_v);
     let draft_open =
         (draft.is_some() || mtp) && (draft_types.0.is_none() || draft_types.1.is_none());
@@ -2052,15 +2404,14 @@ fn estimate_memory(cfg: &AppConfig, env: &Environment) -> MemoryEstimate {
     let mut cpu_offload_bytes = None;
     let mut lazy_offload_bytes = 0u64;
     let mut kv_total = None;
-    let open = match &main_shape {
-        Some(Ok(shape)) => {
-            scenario(&launch, shape, env.accelerator).map(|scenario| (shape, scenario))
+    let open = main.as_ref().map(|shape| {
+        let (scenario, assumed_ctx) = scenario(&launch, shape, env.accelerator);
+        if assumed_ctx {
+            notes.insert(EstimateNote::MissingMetadata);
+            lower(&mut accuracy, Accuracy::Rough);
         }
-        _ => None,
-    };
-    if matches!(main_shape, Some(Ok(_))) && open.is_none() {
-        notes.insert(EstimateNote::MissingMetadata);
-    }
+        (shape, scenario)
+    });
     if let Some((shape, scenario)) = open {
         let gpu_devices = match env.accelerator {
             Accelerator::Gpu { devices } | Accelerator::Unknown { devices } => {
@@ -2132,8 +2483,16 @@ fn estimate_memory(cfg: &AppConfig, env: &Environment) -> MemoryEstimate {
                 }
             }
             for adapter in &adapters {
+                let sized;
+                let tensors = match adapter {
+                    Ok(tensors) => tensors,
+                    Err(bytes) => {
+                        sized = file_tensors(*bytes, shape.n_layer);
+                        &sized
+                    }
+                };
                 let adapted = place(
-                    adapter,
+                    tensors,
                     shape.n_layer,
                     scenario.gpu,
                     launch.ngl,
@@ -2170,12 +2529,11 @@ fn estimate_memory(cfg: &AppConfig, env: &Environment) -> MemoryEstimate {
             if mtp && shape.kv_layers < shape.n_layer {
                 notes.insert(EstimateNote::Auxiliary);
                 let pick = |known: Option<KvType>| known.unwrap_or(KvType::F16);
-                let (per_stream, streams) =
-                    kv_cells(scenario.n_ctx, scenario.n_seq, scenario.unified);
+                let (_, cells) = cache_cells(shape, scenario, &launch);
                 let (cpu, gpu) = kv_bytes(
                     shape,
                     shape.kv_layers..shape.n_layer,
-                    per_stream.saturating_mul(streams),
+                    cells,
                     pick(draft_types.0),
                     pick(draft_types.1),
                     scenario.flash_attn,
@@ -2192,14 +2550,12 @@ fn estimate_memory(cfg: &AppConfig, env: &Environment) -> MemoryEstimate {
             vram = Some(vram_here);
             cpu_offload_bytes = Some(offload_here);
         }
-        if !blocked {
-            notes.insert(EstimateNote::Approximate);
-            if lazy_offload_bytes > 0 {
-                notes.insert(EstimateNote::LazyOffload);
-            }
-            if env.shared_memory && scenario.gpu {
-                notes.insert(EstimateNote::SharedMemory);
-            }
+        notes.insert(EstimateNote::Approximate);
+        if lazy_offload_bytes > 0 {
+            notes.insert(EstimateNote::LazyOffload);
+        }
+        if env.shared_memory && scenario.gpu {
+            notes.insert(EstimateNote::SharedMemory);
         }
         if launch.automatic
             || draft_open
@@ -2213,15 +2569,8 @@ fn estimate_memory(cfg: &AppConfig, env: &Environment) -> MemoryEstimate {
             notes.insert(EstimateNote::Automatic);
         }
     }
-    if blocked || main_shape.as_ref().is_none_or(|shape| shape.is_err()) {
-        ram = None;
-        vram = None;
-        cpu_offload_bytes = None;
-    }
-    if blocked {
-        kv_total = None;
-    }
     MemoryEstimate {
+        accuracy: ram.map(|_| accuracy),
         ram,
         vram,
         disk_bytes: disk.model.saturating_add(disk.auxiliary),

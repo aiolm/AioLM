@@ -25,7 +25,7 @@ vi.mock('../shared/api', async importOriginal => ({
   modelMetadata: vi.fn(async () => ({})),
   estimateModelResources: vi.fn(async () => ({ vram_bytes: 0, ram_offload_bytes: 2 * 1024 ** 3, ssd_offload_bytes: 0,
     required_vram_bytes: 0, host_memory_bytes: 512 * 1024 ** 2, vram_capacity_bytes: null, ram_capacity_bytes: null,
-    disk_bytes: 3 * 1024 ** 3, disk_complete: true, model_bytes: 3 * 1024 ** 3, auxiliary_bytes: 0, kv_bytes: null, notes: ['approximate'] })),
+    disk_bytes: 3 * 1024 ** 3, disk_complete: true, model_bytes: 3 * 1024 ** 3, auxiliary_bytes: 0, kv_bytes: null, accuracy: 'standard', notes: ['approximate'] })),
 }));
 
 const cfg = { ...testConfig, active_model: 'models/a.gguf', runtime_defaults: [] };

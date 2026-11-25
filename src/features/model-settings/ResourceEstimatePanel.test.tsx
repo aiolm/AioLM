@@ -12,7 +12,7 @@ const GiB = 1024 ** 3;
 const estimate: api.ResourceEstimate = {
   vram_bytes: 5 * GiB, ram_offload_bytes: 2 * GiB, ssd_offload_bytes: 0, required_vram_bytes: 5 * GiB, host_memory_bytes: GiB / 2,
   vram_capacity_bytes: 8 * GiB, ram_capacity_bytes: 32 * GiB, disk_bytes: 6 * GiB, disk_complete: true, model_bytes: 5 * GiB,
-  auxiliary_bytes: GiB, kv_bytes: GiB / 2, notes: ['approximate'],
+  auxiliary_bytes: GiB, kv_bytes: GiB / 2, accuracy: 'standard', notes: ['approximate'],
 };
 const cfg = { ...testConfig, active_backend: 'cpu', active_model: 'models/example.gguf', runtime_defaults: [] };
 function panel(config = cfg, invalid = false, open = true) {
@@ -210,7 +210,7 @@ describe('pre-load resource estimates', () => {
 
   it('distinguishes unavailable memory and an incomplete file total from zero', async () => {
     vi.mocked(api.estimateModelResources).mockResolvedValue({ ...estimate, vram_bytes: null, ram_offload_bytes: null, ssd_offload_bytes: null,
-      required_vram_bytes: null, host_memory_bytes: null, disk_complete: false, disk_bytes: 0, notes: ['missing_files', 'unsupported_architecture'] });
+      required_vram_bytes: null, host_memory_bytes: null, disk_complete: false, disk_bytes: 0, accuracy: null, notes: ['missing_files'] });
     render(panel());
     await waitFor(() => expect(screen.getByTestId('resource-ram')).toHaveTextContent('Unavailable'));
     expect(screen.getByTestId('resource-vram')).toHaveTextContent('Unavailable');
@@ -218,6 +218,23 @@ describe('pre-load resource estimates', () => {
     fireEvent.click(screen.getByText('Estimate details'));
     expect(screen.getByTestId('resource-files')).toHaveTextContent('≥ 0 B');
     expect(screen.getByText(/stored file total is incomplete/)).toBeVisible();
+    expect(screen.queryByTestId('resource-accuracy')).not.toBeInTheDocument();
+  });
+
+  it('marks rough and partial estimates instead of hiding their figures', async () => {
+    vi.mocked(api.estimateModelResources).mockResolvedValue({ ...estimate, accuracy: 'rough', notes: ['approximate', 'unsupported_architecture'] });
+    const view = render(panel());
+    await waitFor(() => expect(screen.getByTestId('resource-vram')).toHaveTextContent('~5.00 GiB'));
+    expect(screen.getByTestId('resource-ram')).toHaveTextContent('~2.00 GiB');
+    expect(screen.getByTestId('resource-accuracy')).toHaveTextContent('Rough estimate');
+    fireEvent.click(screen.getByText('Estimate details'));
+    expect(screen.getByTestId('resource-ram-total')).toHaveTextContent('~2.50 GiB');
+    expect(screen.getByText(/generic layout is used/)).toBeVisible();
+
+    vi.mocked(api.estimateModelResources).mockResolvedValue({ ...estimate, accuracy: 'approximate', notes: ['approximate', 'advanced_options'] });
+    view.rerender(panel({ ...cfg, ctx_size: 8192 }));
+    await waitFor(() => expect(screen.getByTestId('resource-accuracy')).toHaveTextContent('Partial estimate'));
+    expect(screen.getByTestId('resource-vram')).toHaveTextContent(/^5.00 GiB$/);
   });
 
   it('keeps estimate details open while an edited draft is recalculated', async () => {

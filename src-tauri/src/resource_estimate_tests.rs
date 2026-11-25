@@ -99,7 +99,7 @@ fn environment(accelerator: Accelerator) -> Environment {
 }
 
 #[test]
-fn python_provider_disk_accounting_accepts_gguf_without_inventing_memory() {
+fn python_providers_get_a_rough_file_size_estimate_without_a_cache_figure() {
     let scratch = Scratch::new();
     let (values, tensors) = plain("llama");
     let path = scratch.write("metal-model.gguf", &fixture::file(&values, &tensors));
@@ -110,9 +110,31 @@ fn python_provider_disk_accounting_accepts_gguf_without_inventing_memory() {
     assert_eq!(result.model_bytes, size);
     assert_eq!(result.disk_bytes, size);
     assert!(result.disk_complete);
-    assert_eq!(result.required_vram_bytes, None);
-    assert_eq!(result.host_memory_bytes, None);
+    // Weights sit on the accelerator with the fixed runtime allowances.
+    assert_eq!(
+        result.required_vram_bytes,
+        Some(size + GPU_DEVICE_RUNTIME.planned())
+    );
+    assert_eq!(
+        result.host_memory_bytes,
+        Some(RAM_BASE.add(GPU_HOST_RUNTIME).planned())
+    );
+    assert_eq!(result.ram_offload_bytes, Some(0));
     assert_eq!(result.kv_bytes, None);
+    assert_eq!(result.accuracy, Some(Accuracy::Rough));
+    assert!(result
+        .notes
+        .contains(&EstimateNote::UnsupportedArchitecture));
+
+    // A CPU engine keeps the weights in RAM.
+    let cpu = super::estimate(&cfg, &environment(Accelerator::Cpu));
+    assert_eq!(cpu.vram_bytes, Some(0));
+    assert_eq!(cpu.ram_offload_bytes, Some(size));
+
+    // Nothing on disk is the one case without figures.
+    cfg.active_model = scratch.0.join("absent.gguf").to_string_lossy().into_owned();
+    let missing = super::estimate(&cfg, &environment(GPU));
+    assert_eq!((missing.vram_bytes, missing.accuracy), (None, None));
 }
 
 fn adapter(path: &Path) -> LoraAdapterConfig {
@@ -380,12 +402,15 @@ fn unresolved_runtime_defaults_use_a_disclosed_baseline_not_all_placements() {
     assert!(inherited.notes.contains(&EstimateNote::Automatic));
     let (known_vram, open_vram) = (known.vram.unwrap(), inherited.vram.unwrap());
     assert_eq!(open_vram, known_vram);
-    // A type the runtime would reject is not read as f16 either.
+    // A type this estimate does not know uses the f16 baseline and says so.
     let unrecognised = AppConfig {
         cache_type_k: "q3_k".into(),
         ..base.clone()
     };
-    assert_eq!(estimate(&unrecognised, &env).kv_bytes, None);
+    let unrecognised = estimate(&unrecognised, &env);
+    assert_eq!(unrecognised.kv_bytes, known.kv_bytes);
+    assert_eq!(unrecognised.accuracy, Some(Accuracy::Approximate));
+    assert!(unrecognised.notes.contains(&EstimateNote::AdvancedOptions));
 
     // App-owned defaults launch 99 layers and 4096 cells whatever the
     // placeholders hold, exactly as `server::build_args` does.
@@ -430,10 +455,9 @@ fn unresolved_runtime_defaults_use_a_disclosed_baseline_not_all_placements() {
         },
         &env,
     );
-    assert_eq!(
-        (missing.ram, missing.vram, missing.kv_bytes),
-        (None, None, None)
-    );
+    // An unstated trained context uses a generic 4096 cells per slot.
+    assert_eq!(missing.kv_bytes, Some(GENERIC_CTX * KV_PER_CELL));
+    assert_eq!(missing.accuracy, Some(Accuracy::Rough));
     assert!(missing.notes.contains(&EstimateNote::MissingMetadata));
 }
 
@@ -555,13 +579,54 @@ fn auxiliary_models_add_memory_and_unsupported_architectures_get_no_figure() {
     let added = size(&projector) + 16_384 + 4 * LAYER + OUTPUT + 4_096 * KV_PER_CELL;
     assert!(with_auxiliary.vram.unwrap().min_bytes >= base.vram.unwrap().min_bytes + added);
 
-    let cases: [(&'static str, Option<(&str, u32)>); 4] = [
-        ("mamba", None),
-        ("newhybrid", Some(("newhybrid.ssm.state_size", 16))),
-        ("deepseek2", Some(("deepseek2.attention.kv_lora_rank", 512))),
-        ("gemma3", Some(("gemma3.attention.sliding_window", 1_024))),
+    assert_eq!(with_auxiliary.accuracy, Some(Accuracy::Standard));
+
+    // A draft whose layout is not modeled is sized with the generic shape
+    // instead of discarding the main model's figures.
+    let (dflash_values, dflash_tensors) = plain("dflash");
+    let dflash = scratch.write(
+        "dflash.gguf",
+        &fixture::file(&dflash_values, &dflash_tensors),
+    );
+    let with_dflash = estimate(
+        &AppConfig {
+            spec_type: "draft-dspark".into(),
+            spec_draft_model: dflash.to_string_lossy().into_owned(),
+            ..config(&path)
+        },
+        &env,
+    );
+    assert_eq!(with_dflash.accuracy, Some(Accuracy::Approximate));
+    assert!(with_dflash.notes.contains(&EstimateNote::AuxiliaryFallback));
+    assert_eq!(with_dflash.kv_bytes, base.kv_bytes.map(|bytes| bytes * 2));
+    assert!(with_dflash.vram.unwrap().min_bytes > base.vram.unwrap().min_bytes);
+}
+
+#[test]
+fn unmodeled_architectures_get_a_rough_generic_estimate() {
+    let scratch = Scratch::new();
+    let env = environment(GPU);
+    let (values, tensors) = plain("llama");
+    let reference = scratch.write("reference.gguf", &fixture::file(&values, &tensors));
+    let reference = estimate(&config(&reference), &env);
+    // f16 MLA caches the latent rank plus the default rotary width as K and
+    // the rank as V, per layer and cell.
+    let mla = 4 * (512 + 64 + 512) * 2;
+    type Case = (&'static str, Option<(&'static str, u32)>, u64);
+    let cases: [Case; 3] = [
+        ("mamba", None, KV_PER_CELL),
+        (
+            "newhybrid",
+            Some(("newhybrid.ssm.state_size", 16)),
+            KV_PER_CELL,
+        ),
+        (
+            "deepseek2",
+            Some(("deepseek2.attention.kv_lora_rank", 512)),
+            mla,
+        ),
     ];
-    for (index, (architecture, extra)) in cases.into_iter().enumerate() {
+    for (index, (architecture, extra, per_cell)) in cases.into_iter().enumerate() {
         let (mut values, tensors) = plain(architecture);
         if let Some((key, value)) = extra {
             values.push((key.into(), Value::U32(value)));
@@ -571,16 +636,79 @@ fn auxiliary_models_add_memory_and_unsupported_architectures_get_no_figure() {
             &fixture::file(&values, &tensors),
         );
         let result = estimate(&config(&path), &env);
-        assert_eq!(
-            (result.ram, result.vram, result.kv_bytes),
-            (None, None, None),
-            "{architecture}"
-        );
+        assert_eq!(result.accuracy, Some(Accuracy::Rough), "{architecture}");
+        assert_eq!(result.kv_bytes, Some(4_096 * per_cell), "{architecture}");
+        assert!(result.vram.is_some() && result.ram.is_some());
         assert!(result
             .notes
             .contains(&EstimateNote::UnsupportedArchitecture));
         assert!(result.disk_complete && result.disk_bytes == size(&path));
     }
+
+    // A looped model declares more layers than it stores: the stored weights
+    // are spread over the declared layers, and each one keeps a cache.
+    let (mut values, tensors) = plain("looped");
+    replace(&mut values, "looped.block_count", Value::U32(8));
+    let looped = scratch.write("looped.gguf", &fixture::file(&values, &tensors));
+    let result = estimate(&config(&looped), &env);
+    assert_eq!(result.accuracy, Some(Accuracy::Rough));
+    assert!(result.notes.contains(&EstimateNote::MissingMetadata));
+    assert_eq!(result.kv_bytes, Some(2 * 4_096 * KV_PER_CELL));
+    assert!(result.vram.unwrap().min_bytes > reference.vram.unwrap().min_bytes);
+}
+
+#[test]
+fn sliding_window_layers_keep_only_the_window_and_the_batch() {
+    let scratch = Scratch::new();
+    let env = environment(GPU);
+    let model = |name: &str, architecture: &'static str, pattern: Option<Vec<u32>>| {
+        let (mut values, tensors) = plain(architecture);
+        values.push((
+            format!("{architecture}.attention.sliding_window"),
+            Value::U32(1_024),
+        ));
+        if let Some(pattern) = pattern {
+            values.push((
+                format!("{architecture}.attention.sliding_window_pattern"),
+                Value::U32s(pattern),
+            ));
+        }
+        scratch.write(name, &fixture::file(&values, &tensors))
+    };
+    // gemma3's fixed period of six makes all four layers sliding-window.
+    let gemma = config(&model("gemma3.gguf", "gemma3", None));
+    let window = pad256(1_024 + launch_settings(&gemma).ubatch);
+    assert!(window < 4_096);
+    let result = estimate(&gemma, &env);
+    assert_eq!(result.accuracy, Some(Accuracy::Standard));
+    assert_eq!(result.kv_bytes, Some(window * KV_PER_CELL));
+
+    // `--swa-full` keeps the whole context.
+    let full = estimate(
+        &AppConfig {
+            server_args: vec!["--swa-full".into()],
+            ..gemma.clone()
+        },
+        &env,
+    );
+    assert_eq!(full.kv_bytes, Some(4_096 * KV_PER_CELL));
+    assert!(!full.notes.contains(&EstimateNote::AdvancedOptions));
+
+    // Header flags pick the sliding-window layers.
+    let flagged = estimate(
+        &config(&model("flagged.gguf", "flagged", Some(vec![1, 0, 1, 0]))),
+        &env,
+    );
+    assert_eq!(flagged.kv_bytes, Some((window + 4_096) * KV_PER_CELL / 2));
+    assert_eq!(flagged.accuracy, Some(Accuracy::Standard));
+
+    // A window without a known layout errs high with full-attention layers.
+    let unknown = estimate(&config(&model("unknown.gguf", "phi3", None)), &env);
+    assert_eq!(unknown.kv_bytes, Some(4_096 * KV_PER_CELL));
+    assert_eq!(unknown.accuracy, Some(Accuracy::Approximate));
+    assert!(unknown
+        .notes
+        .contains(&EstimateNote::UnsupportedArchitecture));
 }
 
 #[test]
@@ -633,7 +761,7 @@ fn expert_weights_stay_in_ram_when_moe_layers_are_kept_on_the_cpu() {
 }
 
 #[test]
-fn only_advanced_arguments_that_move_memory_blank_the_estimate() {
+fn unfollowed_advanced_arguments_lower_accuracy_instead_of_blanking_the_estimate() {
     let scratch = Scratch::new();
     let (values, tensors) = plain("llama");
     let path = scratch.write("model.gguf", &fixture::file(&values, &tensors));
@@ -665,28 +793,45 @@ fn only_advanced_arguments_that_move_memory_blank_the_estimate() {
         (reference.ram, reference.vram)
     );
 
-    let overridden = with_args(&["-ot", "blk\\.[0-3]\\.=CPU"]);
-    assert!(overridden.notes.contains(&EstimateNote::AdvancedOptions));
-    assert_eq!(
-        (overridden.ram, overridden.vram, overridden.kv_bytes),
-        (None, None, None)
-    );
+    assert_eq!(harmless.accuracy, Some(Accuracy::Standard));
 
-    let unknown = with_args(&["--future-option", "3"]);
-    assert!(unknown.notes.contains(&EstimateNote::AdvancedOptions));
-    assert_eq!(
-        (unknown.ram, unknown.vram, unknown.kv_bytes),
-        (None, None, None)
-    );
+    // Unfollowed options keep the configured placement and say so.
     for args in [
-        ["--cache-ram", "8192"],
-        ["--load-mode", "mlock"],
-        ["--image-max-tokens", "65536"],
+        &["-ot", "blk\\.[0-3]\\.=CPU"][..],
+        &["--future-option", "3"],
+        &["--load-mode", "mlock"],
+        &["--image-max-tokens", "65536"],
     ] {
-        let estimate = with_args(&args);
+        let estimate = with_args(args);
         assert!(estimate.notes.contains(&EstimateNote::AdvancedOptions));
-        assert!(estimate.ram.is_none() && estimate.vram.is_none());
+        assert_eq!(estimate.accuracy, Some(Accuracy::Approximate), "{args:?}");
+        assert_eq!(
+            (estimate.ram, estimate.vram, estimate.kv_bytes),
+            (reference.ram, reference.vram, reference.kv_bytes)
+        );
     }
+
+    // Prompt caches and checkpoints fill while serving; a zero limit turns
+    // them off and needs no note.
+    let disabled = with_args(&["--cache-ram", "0", "--ctx-checkpoints", "0"]);
+    assert!(!disabled.notes.contains(&EstimateNote::RuntimeCache));
+    assert!(!disabled.notes.contains(&EstimateNote::AdvancedOptions));
+    assert_eq!(disabled.accuracy, Some(Accuracy::Standard));
+    let cached = with_args(&["--cache-ram", "8192"]);
+    assert!(cached.notes.contains(&EstimateNote::RuntimeCache));
+    assert_eq!(cached.accuracy, Some(Accuracy::Standard));
+    assert_eq!((cached.ram, cached.vram), (reference.ram, reference.vram));
+
+    // An unparsed cache type falls back to the f16 baseline.
+    let odd_cache = estimate(
+        &AppConfig {
+            cache_type_k: "turbo3".into(),
+            ..base.clone()
+        },
+        &env,
+    );
+    assert_eq!(odd_cache.kv_bytes, reference.kv_bytes);
+    assert_eq!(odd_cache.accuracy, Some(Accuracy::Approximate));
 
     // Host attention also removes the GPU's input-mask copy. The host
     // already holds the mask in either case.
@@ -790,7 +935,7 @@ fn cpu_estimate_uses_effective_host_placement_instead_of_saved_gpu_tuning() {
 }
 
 #[test]
-fn malformed_dimensions_and_short_layer_arrays_have_no_memory_figure() {
+fn malformed_dimensions_and_short_layer_arrays_fall_back_to_a_bounded_generic_shape() {
     let scratch = Scratch::new();
     for (index, (key, value)) in [
         ("llama.attention.head_count_kv", Value::U32s(vec![2])),
@@ -808,37 +953,39 @@ fn malformed_dimensions_and_short_layer_arrays_have_no_memory_figure() {
             &fixture::file(&values, &tensors),
         );
         let result = estimate(&config(&path), &environment(GPU));
-        assert!(result.ram.is_none() && result.vram.is_none());
+        assert_eq!(result.accuracy, Some(Accuracy::Rough));
         assert!(result.notes.contains(&EstimateNote::MissingMetadata));
+        // Implausible header sizes are replaced, never honoured: the figures
+        // stay within the model plus a bounded generic cache and buffers.
+        let vram = result.vram.unwrap().max_bytes;
+        assert!(vram > LAYER && vram < 1 << 30, "{key}: {vram}");
+        assert!(result.kv_bytes.unwrap() < 1 << 30, "{key}");
     }
+    // No tensors: the file size stands in for the weights.
     let (values, _) = plain("llama");
     let empty = scratch.write("empty.gguf", &fixture::file(&values, &[]));
-    assert!(estimate(&config(&empty), &environment(GPU)).ram.is_none());
+    let result = estimate(&config(&empty), &environment(GPU));
+    assert_eq!(result.accuracy, Some(Accuracy::Rough));
+    assert!(result.vram.unwrap().min_bytes >= size(&empty));
 
-    // Non-layer weights cannot make an incomplete repeating layer valid.
+    // Non-layer weights cannot make an incomplete repeating layer valid; the
+    // stored layer bytes are spread over the declared layers instead.
     let (values, mut tensors) = plain("llama");
     tensors.retain(|(name, _, _)| !name.starts_with("blk.1."));
     let gap = scratch.write("missing-layer.gguf", &fixture::file(&values, &tensors));
-    let bytes = size(&gap);
     let env = environment(GPU);
-    assert_eq!(
-        super::estimate(&config(&gap), &env),
-        ResourceEstimate {
-            vram_bytes: None,
-            ram_offload_bytes: None,
-            ssd_offload_bytes: None,
-            required_vram_bytes: None,
-            host_memory_bytes: None,
-            vram_capacity_bytes: env.vram_capacity_bytes,
-            ram_capacity_bytes: env.ram_capacity_bytes,
-            disk_bytes: bytes,
-            disk_complete: true,
-            model_bytes: bytes,
-            auxiliary_bytes: 0,
-            kv_bytes: None,
-            notes: vec![EstimateNote::MissingMetadata],
-        }
-    );
+    let result = super::estimate(&config(&gap), &env);
+    assert_eq!(result.accuracy, Some(Accuracy::Rough));
+    assert_eq!(result.notes.first(), Some(&EstimateNote::Approximate));
+    assert!(result.notes.contains(&EstimateNote::MissingMetadata));
+    assert_eq!(result.kv_bytes, Some(4_096 * KV_PER_CELL));
+    assert!(result.vram_bytes.unwrap() >= 3 * LAYER + OUTPUT);
+
+    // A header without an architecture is sized from the file alone.
+    let unnamed = scratch.write("unnamed.gguf", &fixture::file(&[], &tensors));
+    let result = estimate(&config(&unnamed), &env);
+    assert_eq!(result.accuracy, Some(Accuracy::Rough));
+    assert!(result.vram.is_some() && result.ram.is_some());
 }
 
 #[test]
@@ -859,7 +1006,10 @@ fn projector_shards_count_once_and_missing_shards_invalidate_the_total() {
     let result = estimate(&cfg, &environment(GPU));
     assert!(!result.disk_complete);
     assert_eq!(result.auxiliary_bytes, 64);
-    assert!(result.ram.is_none());
+    // A missing auxiliary part leaves the main model's figures in place.
+    assert!(result.ram.is_some());
+    assert!(result.notes.contains(&EstimateNote::MissingFiles));
+    assert_eq!(result.accuracy, Some(Accuracy::Approximate));
 }
 
 #[test]
@@ -1012,7 +1162,7 @@ fn qwen_layer_masks_ple_and_cpu_embeddings_are_included() {
         Loaded::Ready(found) => found,
         _ => panic!("synthetic model unreadable"),
     };
-    let dimensions = shape(found).unwrap();
+    let dimensions = shape(&found).unwrap();
     assert_eq!(
         dimensions.recurrent_bytes,
         vec![71_680 + 24_576, 0, 71_680, 0]
@@ -1021,7 +1171,9 @@ fn qwen_layer_masks_ple_and_cpu_embeddings_are_included() {
     cfg.server_args = ["--override-tensor", "blk.*=CPU"]
         .map(String::from)
         .to_vec();
-    assert!(estimate(&cfg, &environment(GPU)).ram.is_none());
+    let overridden = estimate(&cfg, &environment(GPU));
+    assert_eq!(overridden.accuracy, Some(Accuracy::Approximate));
+    assert!(overridden.notes.contains(&EstimateNote::AdvancedOptions));
     // A partial layer mask or missing state dimension must not silently
     // drop state memory or turn the model back into plain attention.
     replace(
@@ -1030,7 +1182,9 @@ fn qwen_layer_masks_ple_and_cpu_embeddings_are_included() {
         Value::U32s(vec![1]),
     );
     let bad = scratch.write("short-mask.gguf", &fixture::file(&values, &tensors));
-    assert!(estimate(&config(&bad), &environment(GPU)).ram.is_none());
+    let short = estimate(&config(&bad), &environment(GPU));
+    assert_eq!(short.accuracy, Some(Accuracy::Rough));
+    assert!(short.notes.contains(&EstimateNote::MissingMetadata));
     values.retain(|(key, _)| key != "qwen4exp.ssm.state_size");
     let bad = scratch.write("missing-state.gguf", &fixture::file(&values, &tensors));
     assert!(estimate(&config(&bad), &environment(GPU))
@@ -1205,8 +1359,15 @@ fn missing_capacity_is_not_reported_as_zero_and_shared_memory_is_not_counted_twi
         },
     );
     assert!(unknown.vram_bytes.is_some());
-    assert_eq!(unknown.ram_offload_bytes, None);
-    assert_eq!(unknown.ssd_offload_bytes, None);
+    // Without a RAM budget the whole offload is shown as RAM, none as SSD.
+    assert_eq!(
+        unknown.ram_offload_bytes,
+        unknown
+            .required_vram_bytes
+            .map(|_| { estimate(&cfg, &environment(GPU)).cpu_offload_bytes.unwrap() })
+    );
+    assert!(unknown.ram_offload_bytes.unwrap() > 0);
+    assert_eq!(unknown.ssd_offload_bytes, Some(0));
     assert!(unknown.notes.contains(&EstimateNote::CapacityUnknown));
     let known = super::estimate(&cfg, &environment(GPU));
     let shared = super::estimate(
@@ -1240,6 +1401,66 @@ fn inherited_moe_count_does_not_invent_cpu_experts_when_gpu_layers_are_explicit(
     assert!(estimate(&cfg, &environment(GPU)).ram.is_some());
     cfg.gpu.split_mode = SplitMode::Tensor;
     let result = estimate(&cfg, &environment(GPU));
-    assert!(result.ram.is_none());
+    assert!(result.ram.is_some());
+    assert_eq!(result.accuracy, Some(Accuracy::Approximate));
     assert!(result.notes.contains(&EstimateNote::AdvancedOptions));
+}
+
+#[test]
+fn a_looped_sliding_window_model_with_an_unmodeled_draft_still_gets_figures() {
+    // Each of these once removed every figure on its own: a looped layout
+    // with a sliding-window pattern, a draft architecture without a modeled
+    // cache, and zero-sized runtime caches among the advanced arguments.
+    let scratch = Scratch::new();
+    let (mut values, tensors) = plain("looped");
+    replace(&mut values, "looped.block_count", Value::U32(8));
+    values.push(("looped.attention.sliding_window".into(), Value::U32(1_024)));
+    values.push((
+        "looped.attention.sliding_window_pattern".into(),
+        Value::U32s(vec![1, 1, 1, 0, 1, 1, 1, 0]),
+    ));
+    let model = scratch.write("looped.gguf", &fixture::file(&values, &tensors));
+    let (draft_values, draft_tensors) = plain("dflash");
+    let draft = scratch.write("dflash.gguf", &fixture::file(&draft_values, &draft_tensors));
+    let cfg = AppConfig {
+        active_backend: "vulkan".into(),
+        spec_type: "draft-dspark".into(),
+        spec_draft_model: draft.to_string_lossy().into_owned(),
+        server_args: [
+            "--verbosity",
+            "4",
+            "--load-mode",
+            "auto",
+            "--lazy-mode",
+            "on",
+            "--override-tensor",
+            "per_layer_token_embd.weight=CPU",
+            "--fit",
+            "on",
+            "--fit-target",
+            "1024",
+            "--cache-ram",
+            "0",
+            "--ctx-checkpoints",
+            "0",
+            "--warmup",
+        ]
+        .map(String::from)
+        .to_vec(),
+        ..config(&model)
+    };
+    let result = super::estimate(&cfg, &environment(GPU));
+    assert!(result.vram_bytes.unwrap() > 0);
+    assert!(result.host_memory_bytes.unwrap() > 0);
+    assert_eq!(result.ram_offload_bytes, Some(0));
+    assert_eq!(result.ssd_offload_bytes, Some(0));
+    assert_eq!(result.accuracy, Some(Accuracy::Rough));
+    assert!(!result.notes.contains(&EstimateNote::AdvancedOptions));
+    assert!(!result.notes.contains(&EstimateNote::RuntimeCache));
+    assert!(result.notes.contains(&EstimateNote::AuxiliaryFallback));
+    // Six of eight main layers keep only the window; the draft's four
+    // layers keep the full context.
+    let window = pad256(1_024 + launch_settings(&cfg).ubatch);
+    let main = (6 * window + 2 * 4_096) * KV_PER_CELL / 4;
+    assert_eq!(result.kv_bytes, Some(main + 4_096 * KV_PER_CELL));
 }

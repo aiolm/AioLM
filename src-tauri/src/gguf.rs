@@ -674,7 +674,9 @@ const FACT_SUFFIXES: &[&str] = &[
     "attention.key_length",
     "attention.value_length",
     "attention.sliding_window",
+    "attention.sliding_window_pattern",
     "attention.kv_lora_rank",
+    "rope.dimension_count",
     "attention.recurrent_layers",
     "full_attention_interval",
     "ssm.conv_kernel",
@@ -818,8 +820,13 @@ pub struct ModelFacts {
     pub value_length: Option<u64>,
     /// Present on models with sliding-window attention layers.
     pub sliding_window: Option<u64>,
+    /// Which layers use the sliding window: one flag per layer, or a single
+    /// period for llama.cpp's `set_swa_pattern`.
+    pub sliding_window_pattern: Option<PerLayer>,
     /// Present on multi-head latent attention (MLA) models.
     pub kv_lora_rank: Option<u64>,
+    /// Rotary dimensions; MLA caches them next to the latent rank.
+    pub rope_dimension_count: Option<u64>,
     /// The header carries keys only recurrent layers use.
     pub recurrent_state: bool,
     pub recurrent_layers: Option<PerLayer>,
@@ -1244,6 +1251,7 @@ fn scan_model(path: &Path, collect_tensor_types: bool) -> Result<ModelScan, Stri
     facts.value_length = int("attention.value_length");
     facts.sliding_window = int("attention.sliding_window");
     facts.kv_lora_rank = int("attention.kv_lora_rank");
+    facts.rope_dimension_count = int("rope.dimension_count");
     facts.full_attention_interval = int("full_attention_interval");
     facts.ssm_conv_kernel = int("ssm.conv_kernel");
     facts.ssm_inner_size = int("ssm.inner_size");
@@ -1265,6 +1273,7 @@ fn scan_model(path: &Path, collect_tensor_types: bool) -> Result<ModelScan, Stri
     facts.head_count = per_layer("attention.head_count");
     facts.head_count_kv = per_layer("attention.head_count_kv");
     facts.recurrent_layers = per_layer("attention.recurrent_layers");
+    facts.sliding_window_pattern = per_layer("attention.sliding_window_pattern");
     if let Some(RawValue::Ints(layers)) = values.remove(&format!("{architecture}.ple.layers")) {
         facts.ple_layers = layers;
     }

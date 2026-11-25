@@ -20,8 +20,11 @@ export default function ResourceEstimatePanel({ cfg, options, verified, runtimeD
   const { estimate, loading, error, retry } = useResourceEstimate(cfg, options, verified, open && selected && !invalid, runtimeDevices);
   const status = invalid ? copy.invalid : !selected ? copy.select : error ? copy.error : loading ? copy.loading : copy.estimated;
   const placeholder = loading ? '…' : '—';
+  // A rough estimate (generic layout or file size) marks every figure with "~".
+  const rough = estimate?.accuracy === 'rough';
+  const bytes = (value: number | null) => value === null ? copy.unknown : `${rough ? '~' : ''}${formatBytes(value)}`;
+  const accuracy = estimate?.accuracy ? copy.accuracy[estimate.accuracy] : '';
   // Offload is only part of host RAM: GPU-only models still need host buffers.
-  const bytes = (value: number | null) => value === null ? copy.unknown : formatBytes(value);
   const ramBytes = estimate?.ram_offload_bytes != null && estimate.host_memory_bytes !== null
     ? estimate.ram_offload_bytes + estimate.host_memory_bytes : null;
   // A shared GPU allocation can overlap system RAM; do not present its sum as
@@ -54,11 +57,11 @@ export default function ResourceEstimatePanel({ cfg, options, verified, runtimeD
       <span role="status" aria-live="polite" aria-atomic="true" className={estimate ? 'sr-only' : undefined}>{status}</span>
       {error && <button type="button" className="app-button app-button--ghost app-button--sm" onClick={retry}>{copy.retry}</button>}
       {estimate && <details className="resource-estimate-details" open={detailsOpen}>
-        <summary onClick={event => { event.preventDefault(); setDetailsOpen(value => !value); }}>{copy.details}{warning ? <span className="text-warning"> · {warning}</span> : null}</summary>
+        <summary onClick={event => { event.preventDefault(); setDetailsOpen(value => !value); }}>{copy.details}{accuracy ? <span data-testid="resource-accuracy"> · {accuracy}</span> : null}{warning ? <span className="text-warning"> · {warning}</span> : null}</summary>
         <dl>
           <div><dt>{copy.ramTotal}</dt><dd data-testid="resource-ram-total">{bytes(ramBytes)}</dd></div>
-          {totalBytes !== null && <div><dt>{copy.totalMemory}</dt><dd data-testid="resource-total">{formatBytes(totalBytes)}</dd></div>}
-          {requested !== null && requested !== estimate.vram_bytes && <div><dt>{copy.requiredVram}</dt><dd>{formatBytes(requested)}</dd></div>}
+          {totalBytes !== null && <div><dt>{copy.totalMemory}</dt><dd data-testid="resource-total">{bytes(totalBytes)}</dd></div>}
+          {requested !== null && requested !== estimate.vram_bytes && <div><dt>{copy.requiredVram}</dt><dd>{bytes(requested)}</dd></div>}
           {!!estimate.vram_capacity_bytes && <div><dt>{copy.vramCapacity}</dt><dd>{formatBytes(estimate.vram_capacity_bytes)}</dd></div>}
           {estimate.ram_capacity_bytes !== null && <div><dt>{copy.capacity}</dt><dd>{formatBytes(estimate.ram_capacity_bytes)}</dd></div>}
           <div><dt>{copy.hostMemory}</dt><dd>{bytes(estimate.host_memory_bytes)}</dd></div>

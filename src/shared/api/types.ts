@@ -572,6 +572,12 @@ export interface ResourceEstimate {
   model_bytes: number;
   auxiliary_bytes: number;
   kv_bytes: number | null;
+  /**
+   * How closely the figures follow the launch: `approximate` when some options or
+   * auxiliary files are not modeled, `rough` when the main model uses a generic
+   * layout or its file size. `null` only when there are no memory figures.
+   */
+  accuracy: "standard" | "approximate" | "rough" | null;
   notes: string[];
 }
 
