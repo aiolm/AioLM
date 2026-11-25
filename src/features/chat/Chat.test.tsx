@@ -710,7 +710,7 @@ describe("ChatPanel document context warning", () => {
     expect(screen.queryByRole("button", { name: "Stop generation" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Send message" })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Return to Question" }));
+    fireEvent.click(screen.getByRole("button", { name: "Return to ongoing conversation" }));
     expect(log().getByText(answer)).toBeInTheDocument();
     await findTruncationWarning();
     expect(screen.getByRole("button", { name: "Stop generation" })).toBeEnabled();

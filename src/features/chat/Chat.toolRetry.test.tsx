@@ -139,9 +139,9 @@ it.each(['approve', 'reject'] as const)('keeps a pending tool turn with its conv
   const drawer = screen.getByText('Activity').closest('details')!;
   if (drawer.open) fireEvent.click(screen.getByText('Activity'));
   expect(drawer).toHaveProperty('open', false);
-  expect(screen.getByRole('button', { name: `Return to ${thread.title}` })).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Return to ongoing conversation' })).toBeVisible();
 
-  fireEvent.click(screen.getByRole('button', { name: `Return to ${thread.title}` }));
+  fireEvent.click(screen.getByRole('button', { name: 'Return to ongoing conversation' }));
   expect(screen.getByRole('heading', { name: thread.title })).toBeInTheDocument();
   expect(log.getByText(chatText.en.stopCurrentResponseFirst)).toBeInTheDocument();
   expect(screen.getByRole('textbox', { name: 'Chat message' })).toBeEnabled();
@@ -158,7 +158,7 @@ it.each(['approve', 'reject'] as const)('keeps a pending tool turn with its conv
     expect(log.getByText('Finished answer')).toBeInTheDocument();
     expect(screen.queryByText(chatText.en.waitingMcpTool)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Stop generation' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: `Return to ${thread.title}` }));
+    fireEvent.click(screen.getByRole('button', { name: 'Return to ongoing conversation' }));
     expect(screen.getByText(chatText.en.waitingMcpTool)).toBeInTheDocument();
     await act(async () => { finishTool({ content: [{ type: 'text', text: 'Owner tool result' }] }); });
     expect(await log.findByText('Owner-only completed answer.')).toBeInTheDocument();

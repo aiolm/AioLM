@@ -51,7 +51,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
     },
     scroll: { scrollRef, onDraftRendered, onScrollAtBottomChange, showScrollToBottom, scrollToBottom },
     retry: { retryTools, restoreRetryTools },
-    visiblePhase, visibleError, uiError, setUiError, ownerTitle, requireIdle, incompatibleMedia, chatSupported, generates,
+    visiblePhase, visibleError, uiError, setUiError, requireIdle, incompatibleMedia, chatSupported, generates,
     chatUnavailable, canSend, canEditMessages, canRegenerate, disabled, loadingModel, closeThreadPanel, startNewThread,
     copyMessage, editUserMessage, regenerateLast, continueLast, sendMessage,
     enterToSend, onKeyDown, lastMessage, responseState, recoverable, queueState,
@@ -196,10 +196,9 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
             {viewingLiveThread && projectDocumentsLoading && <FeedbackBanner tone="info">{projectCopy.loading}</FeedbackBanner>}
             {viewingLiveThread && projectDocumentsError && <FeedbackBanner tone="error" action={{ label: projectCopy.retry, onClick: retryProjectDocuments }}>{projectDocumentsError}</FeedbackBanner>}
           </PanelFeedback>
-          {!viewingLiveThread && liveThread && <FeedbackBanner className="chat-owner-banner" tone={pendingToolCall ? 'warning' : 'info'}
-            action={{ label: ownerCopy.returnTo.replace('{title}', () => ownerTitle), onClick: () => selectThread(liveThread) }}>
-            {(pendingToolCall ? ownerCopy.approval : ownerCopy.working).replace('{title}', () => ownerTitle)}
-          </FeedbackBanner>}
+          {!viewingLiveThread && liveThread && <div className="chat-owner-banner">
+            <button type="button" className="app-button app-button--secondary" onClick={() => selectThread(liveThread)}>{ownerCopy.returnTo}</button>
+          </div>}
           {/* The composer and its approval/context state belong to the live buffer,
               not the conversation being browsed. Keep that buffer intact on return. */}
           {viewingLiveThread && <ChatComposer
