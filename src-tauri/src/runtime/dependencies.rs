@@ -540,6 +540,7 @@ impl DependencyPackagingContext {
     }
 }
 
+#[cfg(any(windows, test))]
 fn version_sort_key(name: &str) -> Vec<u64> {
     name.split(|ch: char| !ch.is_ascii_digit())
         .filter(|part| !part.is_empty())
@@ -547,6 +548,7 @@ fn version_sort_key(name: &str) -> Vec<u64> {
         .collect()
 }
 
+#[cfg(any(windows, test))]
 pub(super) fn rocm_sdk_candidates_in_bases(bases: &[PathBuf]) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     for base in bases {
