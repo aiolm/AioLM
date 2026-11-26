@@ -26,6 +26,7 @@ const en = {
   effectiveArgs: "Launch command",
   engineCommandCaptureFailed: "The command that runs the inference engine directly could not be recorded for this run, so only the command AioLM ran is shown. The measurement was not affected. Reason:",
   engineCommandNotRecorded: "This record does not include the command that runs the inference engine directly, so only the command AioLM ran is shown. A new run records both.",
+  engineCommandAttached: "This run connected to an already-running server through AioLM's proxy helper, so only the command AioLM ran is shown.",
 } as const;
 
 type BenchmarkCopy = { [K in keyof typeof en]: string };
@@ -55,6 +56,7 @@ const ko: BenchmarkCopy = {
   effectiveArgs: "실행 명령어",
   engineCommandCaptureFailed: "이 실행에서는 추론 엔진을 직접 실행하는 명령을 기록하지 못해 AioLM이 실행한 명령만 표시합니다. 측정에는 영향이 없습니다. 원인:",
   engineCommandNotRecorded: "이 기록에는 추론 엔진을 직접 실행하는 명령이 저장되어 있지 않아 AioLM이 실행한 명령만 표시합니다. 다시 측정하면 두 명령이 모두 기록됩니다.",
+  engineCommandAttached: "이 실행은 이미 실행 중인 서버에 AioLM 프록시 도우미로 연결했기 때문에 AioLM이 실행한 명령만 표시합니다.",
 };
 
 const ja: BenchmarkCopy = {
@@ -82,6 +84,7 @@ const ja: BenchmarkCopy = {
   effectiveArgs: "起動コマンド",
   engineCommandCaptureFailed: "この実行では推論エンジンを直接起動するコマンドを記録できなかったため、AioLM が実行したコマンドだけを表示します。測定には影響ありません。原因:",
   engineCommandNotRecorded: "この記録には推論エンジンを直接起動するコマンドが保存されていないため、AioLM が実行したコマンドだけを表示します。もう一度測定すると両方のコマンドが記録されます。",
+  engineCommandAttached: "この実行はすでに起動しているサーバーへ AioLM のプロキシヘルパー経由で接続したため、AioLM が実行したコマンドだけを表示します。",
 };
 
 const zh: BenchmarkCopy = {
@@ -109,6 +112,7 @@ const zh: BenchmarkCopy = {
   effectiveArgs: "启动命令",
   engineCommandCaptureFailed: "本次运行未能记录直接运行推理引擎的命令，因此仅显示 AioLM 运行的命令。测量不受影响。原因：",
   engineCommandNotRecorded: "此记录未保存直接运行推理引擎的命令，因此仅显示 AioLM 运行的命令。重新测量后会同时记录两条命令。",
+  engineCommandAttached: "本次运行通过 AioLM 代理辅助程序连接到已在运行的服务器，因此仅显示 AioLM 运行的命令。",
 };
 
 const servingEn = {

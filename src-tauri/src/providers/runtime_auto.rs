@@ -491,12 +491,7 @@ fn owned_spec(manifest: &registry::RuntimeManifest) -> Option<ConnectionSpec> {
             }
         }
         Target::Managed { launch, artifacts } => {
-            if spec.upstream_model.is_some()
-                || !Path::new(&launch.program).is_absolute()
-                || !launch.env.is_empty()
-                || !launch.args.iter().any(|arg| has_binding(arg, "{model}"))
-                || !launch.args.iter().any(|arg| has_binding(arg, "{port}"))
-                || !launch.args.iter().any(|arg| has_binding(arg, "{host}"))
+            if !valid_managed_launch(&spec, launch)
                 || artifacts.len() > 256
                 || artifacts.iter().any(|path| !Path::new(path).is_absolute())
             {
@@ -518,6 +513,15 @@ fn owned_spec(manifest: &registry::RuntimeManifest) -> Option<ConnectionSpec> {
         return None;
     }
     Some(spec)
+}
+
+fn valid_managed_launch(spec: &ConnectionSpec, launch: &registry::ProcessSpec) -> bool {
+    spec.upstream_model.is_none()
+        && Path::new(&launch.program).is_absolute()
+        && launch.env.is_empty()
+        && launch.args.iter().any(|arg| has_binding(arg, "{model}"))
+        && launch.args.iter().any(|arg| has_binding(arg, "{port}"))
+        && launch.args.iter().any(|arg| has_binding(arg, "{host}"))
 }
 
 pub(crate) fn is_owned_manifest(manifest: &registry::RuntimeManifest) -> bool {
@@ -721,6 +725,109 @@ fn engine_command(
         )
         .chain(args)
         .collect(),
+    ))
+}
+
+/// Reconstructs the managed inference engine's command line from a saved
+/// helper argv, strictly confining `connection.json` lookups inside
+/// `registry_root` and keeping `{port}` unexpanded rather than emitting the
+/// helper's front port. Returns `None` for non-helper commands, attached proxy
+/// targets, missing/foreign/invalid specs, or mismatched model paths.
+pub(crate) fn engine_command_from_helper_argv(
+    registry_root: &Path,
+    args: &[String],
+) -> Option<Vec<String>> {
+    let helper_args = if args.first().map(String::as_str) == Some(INTERNAL) {
+        args
+    } else if args.get(1).map(String::as_str) == Some(INTERNAL) {
+        &args[1..]
+    } else {
+        return None;
+    };
+    if helper_args.len() < 5 || helper_args[0] != INTERNAL || helper_args[1] != "serve" {
+        return None;
+    }
+    let _helper_port = helper_args[4].parse::<u16>().ok()?;
+    let transport = match &helper_args[5..] {
+        [] => None,
+        [separator, tag, payload] if separator == "--" && tag == ARGV_HEADER => {
+            let transport: OptionTransport = serde_json::from_str(payload).ok()?;
+            if transport.version != 1 {
+                return None;
+            }
+            Some(transport)
+        }
+        _ => return None,
+    };
+    let decoded = decoded_spec_path(&helper_args[2]).ok()?;
+    if decoded.file_name().and_then(|name| name.to_str()) != Some("connection.json") {
+        return None;
+    }
+    let runtime_dir = decoded.parent()?;
+    let engine_dir_component = runtime_dir.parent()?;
+    let runtime_id = runtime_dir.file_name()?.to_str()?;
+    let engine_dir_name = engine_dir_component.file_name()?.to_str()?;
+    let engine_id = ProviderId::parse(engine_dir_name)?;
+    let suffix = engine_id.as_str().strip_prefix("custom.auto-")?;
+    if suffix.len() != 16
+        || !suffix
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || runtime_id != format!("connection-{suffix}")
+    {
+        return None;
+    }
+    let engine_dir = registry_root.join(engine_id.as_str());
+    let runtime_dir = engine_dir.join(runtime_id);
+    let expected = runtime_dir.join("connection.json");
+    if !crate::verbatim_path::same_verbatim_stripped_path(
+        &decoded.to_string_lossy(),
+        &expected.to_string_lossy(),
+    ) {
+        return None;
+    }
+    if [registry_root, &engine_dir, &runtime_dir, &expected]
+        .into_iter()
+        .any(|path| fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink()))
+    {
+        return None;
+    }
+    let spec = read_spec(&expected).ok()?;
+    if spec.engine_id != engine_id || spec.runtime_id != runtime_id {
+        return None;
+    }
+    let Target::Managed { launch, .. } = &spec.target else {
+        return None;
+    };
+    if !valid_managed_launch(&spec, launch) {
+        return None;
+    }
+    let model = &helper_args[3];
+    if !crate::verbatim_path::same_verbatim_stripped_path(model, &spec.model_path) {
+        return None;
+    }
+    let legacy_alias = format!("aiolm-{}", spec.runtime_id);
+    let alias = spec.served_alias.as_deref().unwrap_or(&legacy_alias);
+    let expanded = transported_arguments_with_port(
+        launch,
+        transport.as_ref(),
+        model,
+        RECORDED_PORT_PLACEHOLDER,
+        alias,
+    )
+    .ok()?;
+    let argv = std::iter::once(
+        crate::verbatim_path::strip_windows_verbatim_prefix_str(&launch.program).into_owned(),
+    )
+    .chain(expanded)
+    .collect();
+    let redacted = crate::performance_bench::redacted_args(argv);
+    Some(super::runtime_schema::mask_argv_for_stored_runtime(
+        registry_root,
+        engine_id,
+        runtime_id,
+        redacted,
+        "[redacted]",
     ))
 }
 
@@ -2664,5 +2771,377 @@ mod tests {
             )),
             "{engine_argv:?}"
         );
+    }
+
+    #[test]
+    fn engine_command_from_helper_argv_reconstructs_managed_and_rejects_untrusted_specs() {
+        let area = Area::new();
+        let registry_root = area.0.join("adapters");
+        let engine_dir = area.0.join("한글 엔진 dir");
+        fs::create_dir_all(&engine_dir).unwrap();
+        let engine = engine_dir.join("synthetic-engine.exe");
+        let model = engine_dir.join("한글 model.gguf");
+        fs::write(&engine, b"synthetic engine").unwrap();
+        fs::write(&model, b"synthetic model").unwrap();
+
+        let clean_path = |path: &Path| {
+            crate::verbatim_path::strip_windows_verbatim_prefix(path.to_path_buf())
+                .to_string_lossy()
+                .into_owned()
+        };
+        let clean_engine = clean_path(&engine);
+        let clean_model = clean_path(&model);
+        #[cfg(windows)]
+        let stored_engine = format!(r"\\?\{clean_engine}");
+        #[cfg(not(windows))]
+        let stored_engine = clean_engine.clone();
+        #[cfg(windows)]
+        let stored_model = format!(r"\\?\{clean_model}");
+        #[cfg(not(windows))]
+        let stored_model = clean_model.clone();
+
+        let engine_id = ProviderId::parse("custom.auto-0123456789abcdef").unwrap();
+        let runtime_id = "connection-0123456789abcdef".to_string();
+        let conn_dir = registry_root.join(engine_id.as_str()).join(&runtime_id);
+        fs::create_dir_all(&conn_dir).unwrap();
+        let spec_path = conn_dir.join("connection.json");
+        let launch_spec = registry::ProcessSpec {
+            program: stored_engine,
+            args: vec![
+                "serve".into(),
+                "--model".into(),
+                "{model}".into(),
+                "--port={port}".into(),
+                "--host={host}".into(),
+                "--alias".into(),
+                "{model_alias}".into(),
+            ],
+            env: BTreeMap::new(),
+            working_directory: None,
+        };
+        let spec = ConnectionSpec {
+            version: 1,
+            engine_id,
+            runtime_id: runtime_id.clone(),
+            target: Target::Managed {
+                launch: launch_spec.clone(),
+                artifacts: vec![],
+            },
+            model_path: stored_model.clone(),
+            upstream_model: None,
+            served_alias: Some("synthetic-served-model".into()),
+        };
+        fs::write(&spec_path, serde_json::to_vec(&spec).unwrap()).unwrap();
+
+        // Record accepted help with a schema-marked sensitive option in the same registry root.
+        let mut help_schema = super::super::runtime_options::OptionSchema {
+            schema_version: super::super::runtime_options::SCHEMA_VERSION,
+            binding: super::super::runtime_options::SchemaBinding {
+                engine: engine_id.as_str().into(),
+                runtime: runtime_id.clone(),
+                fingerprint: "a".repeat(64),
+            },
+            options: vec![super::super::runtime_options::OptionDefinition {
+                key: "secret_token".into(),
+                scope: vec!["serve".into()],
+                spellings: vec![
+                    super::super::runtime_options::Spelling {
+                        flag: "--secret-token".into(),
+                        style: super::super::runtime_options::ValueStyle::Separate,
+                        polarity: None,
+                    },
+                    super::super::runtime_options::Spelling {
+                        flag: "-st".into(),
+                        style: super::super::runtime_options::ValueStyle::Separate,
+                        polarity: None,
+                    },
+                ],
+                position: None,
+                kind: super::super::runtime_options::Fact {
+                    value: Some(super::super::runtime_options::ValueKind::Text),
+                    certainty: super::super::runtime_options::Certainty::Verified,
+                    source: Some(super::super::runtime_options::Source::Adapter {
+                        id: "synthetic".into(),
+                        revision: "1".into(),
+                    }),
+                },
+                arity: super::super::runtime_options::Fact {
+                    value: Some(super::super::runtime_options::Arity {
+                        min: 1,
+                        max: Some(1),
+                    }),
+                    certainty: super::super::runtime_options::Certainty::Verified,
+                    source: Some(super::super::runtime_options::Source::Adapter {
+                        id: "synthetic".into(),
+                        revision: "1".into(),
+                    }),
+                },
+                repeatable: super::super::runtime_options::Fact::default(),
+                choices: super::super::runtime_options::Fact::default(),
+                range: super::super::runtime_options::Fact::default(),
+                unit: super::super::runtime_options::Fact::default(),
+                runtime_default: super::super::runtime_options::Fact::default(),
+                group: "options".into(),
+                help: String::new(),
+                target: super::super::runtime_options::Target::Launch,
+                request_field: super::super::runtime_options::Fact::default(),
+                restart_required: super::super::runtime_options::Fact::default(),
+                sensitive: super::super::runtime_options::Fact {
+                    value: Some(true),
+                    certainty: super::super::runtime_options::Certainty::Verified,
+                    source: Some(super::super::runtime_options::Source::Adapter {
+                        id: "synthetic".into(),
+                        revision: "1".into(),
+                    }),
+                },
+                local_path: super::super::runtime_options::Fact::default(),
+                benchmark_public: super::super::runtime_options::Fact::default(),
+                benchmark_name: super::super::runtime_options::Fact::default(),
+                benchmark_role: super::super::runtime_options::Fact::default(),
+                managed: None,
+                raw_spans: vec![],
+            }],
+            constraints: vec![],
+            raw_help: vec![],
+            end_of_options: super::super::runtime_options::Fact::default(),
+        };
+        let mut temp_report = super::super::runtime_help::HelpReport {
+            identity: super::super::runtime_help::Identity {
+                fingerprint: "a".repeat(64),
+                executable_sha256: "b".repeat(64),
+                artifacts_sha256: BTreeMap::new(),
+                parser_version: super::super::runtime_help::PARSER_VERSION,
+            },
+            scope: vec!["serve".into()],
+            stdout: super::super::runtime_help::TextOutput {
+                text: "Options:".into(),
+                clean_text: "Options:".into(),
+                encoding: "utf-8".into(),
+                decoding_loss: false,
+                truncated: false,
+                read_error: None,
+                raw_bytes_base64: None,
+            },
+            stderr: super::super::runtime_help::TextOutput {
+                text: String::new(),
+                clean_text: String::new(),
+                encoding: "utf-8".into(),
+                decoding_loss: false,
+                truncated: false,
+                read_error: None,
+                raw_bytes_base64: None,
+            },
+            exit_code: Some(0),
+            success: true,
+            cancelled: false,
+            timed_out: false,
+            error: None,
+            elapsed_ms: 1,
+        };
+        help_schema.constraints.clear();
+        temp_report.scope = vec!["serve".into()];
+        super::super::runtime_help_store::save_snapshot(
+            &registry_root,
+            engine_id.as_str(),
+            &runtime_id,
+            &super::super::runtime_help_store::HelpSnapshot {
+                report: temp_report,
+                schema: help_schema,
+            },
+        )
+        .unwrap();
+        let help_dir = super::super::runtime_help_store::snapshot_root(
+            &registry_root,
+            engine_id.as_str(),
+            &runtime_id,
+        )
+        .unwrap();
+        let accepted = super::super::runtime_schema::AcceptedHelp {
+            version: super::super::runtime_schema::ACCEPTED_VERSION,
+            working_directory: None,
+            fingerprint: "a".repeat(64),
+            request: super::super::runtime_schema::HelpRequest {
+                encoding: None,
+                locale: None,
+                working_directory: None,
+                program: None,
+                args: vec!["serve".into(), "--help".into()],
+                scope: vec!["serve".into()],
+            },
+        };
+        fs::write(
+            help_dir.join("accepted.json"),
+            serde_json::to_vec(&accepted).unwrap(),
+        )
+        .unwrap();
+
+        let encoded = encoded_spec_path(&spec_path).unwrap();
+        // 1. Without option transport tail, full executable argv.
+        let basic_args = vec![
+            r"C:\synthetic\aiolm.exe".into(),
+            INTERNAL.into(),
+            "serve".into(),
+            encoded.clone(),
+            clean_model.clone(),
+            "43210".into(),
+        ];
+        let basic = engine_command_from_helper_argv(&registry_root, &basic_args)
+            .expect("managed spec reconstructs without option transport");
+        assert_eq!(
+            basic,
+            [
+                clean_engine.as_str(),
+                "serve",
+                "--model",
+                clean_model.as_str(),
+                "--port={port}",
+                "--host=127.0.0.1",
+                "--alias",
+                "synthetic-served-model",
+            ]
+        );
+        assert!(basic.iter().all(|arg| !arg.contains("43210")));
+        assert!(basic.iter().all(|arg| !arg.contains(r"\\?\")));
+
+        // 2. With option transport tail and leading INTERNAL (cli-style slice), masking --api-key and schema-sensitive flags.
+        let mut transport_argv = launch_spec.args.clone();
+        transport_argv.extend([
+            "--api-key".into(),
+            "SYNTHETIC-API-KEY".into(),
+            "--secret-token".into(),
+            "-leading-dash-secret".into(),
+            "-st=INLINE-SECRET".into(),
+            "--ctx-size".into(),
+            "4096".into(),
+        ]);
+        let transport = OptionTransport {
+            version: 1,
+            argv: transport_argv,
+            bindings: BTreeMap::from([
+                (2, "{model}".into()),
+                (3, "--port={port}".into()),
+                (4, "--host={host}".into()),
+                (6, "{model_alias}".into()),
+            ]),
+        };
+        let transport_args = vec![
+            INTERNAL.into(),
+            "serve".into(),
+            encoded.clone(),
+            stored_model,
+            "43210".into(),
+            "--".into(),
+            ARGV_HEADER.into(),
+            serde_json::to_string(&transport).unwrap(),
+        ];
+        let with_transport = engine_command_from_helper_argv(&registry_root, &transport_args)
+            .expect("managed spec with transport reconstructs and masks secrets");
+        assert_eq!(
+            with_transport,
+            [
+                clean_engine.as_str(),
+                "serve",
+                "--model",
+                clean_model.as_str(),
+                "--port={port}",
+                "--host=127.0.0.1",
+                "--alias",
+                "synthetic-served-model",
+                "--api-key",
+                "[redacted]",
+                "--secret-token",
+                "[redacted]",
+                "-st=[redacted]",
+                "--ctx-size",
+                "4096",
+            ]
+        );
+
+        // 3. Rejections: mismatched model, malformed transport, probe subcommand, non-numeric port, non-helper args.
+        let mut wrong_model = basic_args.clone();
+        wrong_model[4] = engine_dir.join("other.gguf").to_string_lossy().into_owned();
+        assert!(engine_command_from_helper_argv(&registry_root, &wrong_model).is_none());
+
+        let mut bad_transport = transport_args.clone();
+        bad_transport[7] = "{not-json".into();
+        assert!(engine_command_from_helper_argv(&registry_root, &bad_transport).is_none());
+
+        let mut probe_args = basic_args.clone();
+        probe_args[2] = "probe".into();
+        assert!(engine_command_from_helper_argv(&registry_root, &probe_args).is_none());
+
+        let mut bad_port = basic_args.clone();
+        bad_port[5] = "{port}".into();
+        assert!(engine_command_from_helper_argv(&registry_root, &bad_port).is_none());
+
+        assert!(engine_command_from_helper_argv(
+            &registry_root,
+            &[
+                "/synthetic/llama-server".into(),
+                "--model".into(),
+                clean_model.clone()
+            ]
+        )
+        .is_none());
+
+        // 4. Reject foreign connection.json paths outside registry_root even with identical directory structure.
+        let foreign_root = area.0.join("foreign-adapters");
+        let foreign_spec_path = foreign_root
+            .join(engine_id.as_str())
+            .join(&runtime_id)
+            .join("connection.json");
+        fs::create_dir_all(foreign_spec_path.parent().unwrap()).unwrap();
+        fs::write(&foreign_spec_path, serde_json::to_vec(&spec).unwrap()).unwrap();
+        let foreign_args = vec![
+            r"C:\synthetic\aiolm.exe".into(),
+            INTERNAL.into(),
+            "serve".into(),
+            encoded_spec_path(&foreign_spec_path).unwrap(),
+            clean_model.clone(),
+            "43210".into(),
+        ];
+        assert!(engine_command_from_helper_argv(&registry_root, &foreign_args).is_none());
+
+        // 5. Reject Attached connections (even when inside registry_root).
+        let attached_engine = ProviderId::parse("custom.auto-fedcba9876543210").unwrap();
+        let attached_runtime = "connection-fedcba9876543210".to_string();
+        let attached_dir = registry_root
+            .join(attached_engine.as_str())
+            .join(&attached_runtime);
+        fs::create_dir_all(&attached_dir).unwrap();
+        let attached_spec_path = attached_dir.join("connection.json");
+        let model_ref = attached_dir
+            .join("model-reference.json")
+            .to_string_lossy()
+            .into_owned();
+        let attached_spec = ConnectionSpec {
+            version: 1,
+            engine_id: attached_engine,
+            runtime_id: attached_runtime,
+            target: Target::Attached {
+                base_url: "http://127.0.0.1:43121/v1".into(),
+            },
+            model_path: model_ref.clone(),
+            upstream_model: Some("synthetic-upstream".into()),
+            served_alias: None,
+        };
+        fs::write(
+            &attached_spec_path,
+            serde_json::to_vec(&attached_spec).unwrap(),
+        )
+        .unwrap();
+        let attached_args = vec![
+            r"C:\synthetic\aiolm.exe".into(),
+            INTERNAL.into(),
+            "serve".into(),
+            encoded_spec_path(&attached_spec_path).unwrap(),
+            model_ref,
+            "43210".into(),
+        ];
+        assert!(engine_command_from_helper_argv(&registry_root, &attached_args).is_none());
+
+        // 6. Reject removed connection.json.
+        fs::remove_file(&spec_path).unwrap();
+        assert!(engine_command_from_helper_argv(&registry_root, &basic_args).is_none());
     }
 }

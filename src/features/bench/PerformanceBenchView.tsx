@@ -27,11 +27,11 @@ import { CONCURRENCIES, CORPORA, OUTPUT_TOKENS, PROMPT_BYTES, TASK_ID, formatInp
 
 /**
  * AioLM's automatic-connection helper (`<app> --internal-runtime-auto serve …`)
- * starts the inference engine on AioLM's behalf. A helper run whose record has
- * neither `engine_args` nor `engine_args_error` predates engine-command
- * recording (a capture failure records its reason instead), and the engine command
- * cannot be rebuilt from the helper arguments alone: they omit the engine
- * program and keep the model and port bindings unresolved.
+ * runs both managed engines and proxies for already-running attached servers.
+ * Attached connections have no separate direct engine command (`topology === 'attached'`),
+ * whereas a managed helper run whose record has neither `engine_args` nor
+ * `engine_args_error` predates engine-command recording and cannot be rebuilt from
+ * the helper arguments alone without the connection registration.
  */
 const runsThroughAutoHelper = (args: readonly string[]) => args[1] === '--internal-runtime-auto' && args[2] === 'serve';
 
@@ -211,7 +211,11 @@ export function PerformanceBenchView({ controller }: { controller: ReturnType<ty
             </div></details>}
             {visibleResult && visibleResult.args.length > 0 && <details className="performance-details"><summary>{copy.effectiveArgs}</summary><div className="performance-details-body"><CommandLineViewer argv={visibleResult.args} engineArgv={visibleResult.engine_args} context="recorded" framed={false} labels={commandToolsCopy[locale]} />{!visibleResult.engine_args?.length && (visibleResult.engine_args_error
               ? <p className="app-section-hint">{copy.engineCommandCaptureFailed} {normalizeDisplayText(visibleResult.engine_args_error)}</p>
-              : runsThroughAutoHelper(visibleResult.args) && <p className="app-section-hint">{copy.engineCommandNotRecorded}</p>)}</div></details>}
+              : runsThroughAutoHelper(visibleResult.args) && (
+                visibleResult.provenance?.execution.topology === 'attached'
+                  ? <p className="app-section-hint">{copy.engineCommandAttached}</p>
+                  : <p className="app-section-hint">{copy.engineCommandNotRecorded}</p>
+              ))}</div></details>}
             <details className="performance-details"><summary>{copy.metrics}</summary><div className="performance-details-body"><dl className="performance-metric-guide">
               <div><dt>{copy.firstOutput}</dt><dd>{copy.firstOutputHint}</dd></div>
               <div><dt>{copy.prefillRate}</dt><dd>{copy.prefillRateHint}</dd></div>

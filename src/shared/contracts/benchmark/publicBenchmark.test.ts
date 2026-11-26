@@ -40,6 +40,7 @@ describe('public benchmark boundary', () => {
     record.result.provenance!.model.format = format;
     record.result.args = ['/private/python', '--api-key', 'private-secret'];
     record.result.engine_args = ['/private/engine', '--api-key', 'private-engine-secret'];
+    record.result.engine_args_error = 'private-engine-capture-error';
     const result = toPublicBenchmark(record, submissionId);
     expect(result.schema_version).toBe(4);
     expect(result.method.version).toBe(5);

@@ -186,17 +186,11 @@ pub fn mask_argv(
         .collect()
 }
 
-/// Secret keys one stored runtime declares, without selecting it: its
-/// accepted help (whatever parser wrote it) and, for a registered engine,
-/// its manifest options, with its option metadata or built-in facts applied.
-/// Only for hiding values; never for launch.
-fn stored_runtime_sensitive_keys(
-    root: &Path,
-    provider: ProviderId,
-    runtime: &str,
-) -> BTreeSet<String> {
+/// Schemas a stored runtime declares: its accepted help (whatever parser wrote
+/// it) and, for a registered engine, its manifest options, with option metadata
+/// or built-in facts applied. Never used for launch decisions.
+fn stored_runtime_schemas(root: &Path, provider: ProviderId, runtime: &str) -> Vec<OptionSchema> {
     let engine = provider.as_str();
-    let mut keys = BTreeSet::new();
     let (declared, metadata) =
         crate::providers::adapter::help::stored_option_facts(provider, runtime);
     let help = load_accepted(root, engine, runtime)
@@ -217,10 +211,130 @@ fn stored_runtime_sensitive_keys(
         raw_help: Vec::new(),
         end_of_options: Fact::default(),
     });
+    let mut schemas = Vec::new();
     for mut schema in help.into_iter().chain(manifest_schema) {
         if let Some(metadata) = &metadata {
             runtime_metadata::apply(&mut schema, metadata, false, false);
         }
+        schemas.push(schema);
+    }
+    schemas
+}
+
+fn merge_sensitive_arity(existing: Option<Arity>, incoming: Option<Arity>) -> Option<Arity> {
+    match (existing, incoming) {
+        (Some(a), Some(b)) => Some(Arity {
+            min: a.min.max(b.min),
+            max: match (a.max, b.max) {
+                (None, _) | (_, None) => None,
+                (Some(x), Some(y)) => Some(x.max(y)),
+            },
+        }),
+        // Keep a known value-consuming arity so required values starting with `-`
+        // or multi-value flags stay covered; fall back to unknown if 0-arity.
+        (Some(known), None) | (None, Some(known)) if known.max != Some(0) => Some(known),
+        _ => None,
+    }
+}
+
+/// Mask values passed to flags marked sensitive in a stored runtime's
+/// accepted help or declared manifest options without needing an `AppConfig`.
+pub(crate) fn mask_argv_for_stored_runtime(
+    root: &Path,
+    provider: ProviderId,
+    runtime: &str,
+    argv: Vec<String>,
+    placeholder: &str,
+) -> Vec<String> {
+    let mut sensitive_flags: BTreeMap<String, Option<Arity>> = BTreeMap::new();
+    for schema in stored_runtime_schemas(root, provider, runtime) {
+        for option in schema
+            .options
+            .iter()
+            .filter(|option| option.sensitive.supported() == Some(&true))
+        {
+            let arity = option.arity.supported().copied();
+            for spelling in &option.spellings {
+                sensitive_flags
+                    .entry(spelling.flag.clone())
+                    .and_modify(|existing| *existing = merge_sensitive_arity(*existing, arity))
+                    .or_insert(arity);
+            }
+        }
+    }
+    if sensitive_flags.is_empty() {
+        return argv;
+    }
+    let mut masked = Vec::with_capacity(argv.len());
+    let mut index = 0;
+    while index < argv.len() {
+        let token = &argv[index];
+        if let Some((flag, _)) = token.split_once('=') {
+            if flag.starts_with('-') && sensitive_flags.contains_key(flag) {
+                masked.push(format!("{flag}={placeholder}"));
+                index += 1;
+                continue;
+            }
+        }
+        let Some(&arity) = sensitive_flags.get(token) else {
+            masked.push(token.clone());
+            index += 1;
+            continue;
+        };
+        masked.push(token.clone());
+        index += 1;
+        let consumed = match arity {
+            Some(Arity {
+                min: 0,
+                max: Some(0),
+            }) => 0,
+            Some(Arity {
+                min,
+                max: Some(max),
+            }) => {
+                let min = usize::from(min);
+                let max = usize::from(max);
+                let mut count = 0;
+                while count < max && index + count < argv.len() {
+                    if count >= min && argv[index + count].starts_with('-') {
+                        break;
+                    }
+                    count += 1;
+                }
+                count
+            }
+            Some(Arity { min, max: None }) => {
+                let min = usize::from(min);
+                let mut count = 0;
+                while index + count < argv.len() {
+                    if count >= min && argv[index + count].starts_with('-') {
+                        break;
+                    }
+                    count += 1;
+                }
+                count
+            }
+            None => usize::from(argv.get(index).is_some_and(|next| !next.starts_with('-'))),
+        };
+        for _ in 0..consumed {
+            masked.push(placeholder.to_owned());
+        }
+        index += consumed;
+    }
+    masked
+}
+
+/// Secret keys one stored runtime declares, without selecting it: its
+/// accepted help (whatever parser wrote it) and, for a registered engine,
+/// its manifest options, with its option metadata or built-in facts applied.
+/// Only for hiding values; never for launch.
+fn stored_runtime_sensitive_keys(
+    root: &Path,
+    provider: ProviderId,
+    runtime: &str,
+) -> BTreeSet<String> {
+    let mut keys = BTreeSet::new();
+    for schema in stored_runtime_schemas(root, provider, runtime) {
         secret_keys_of(&schema, &mut keys);
     }
     keys

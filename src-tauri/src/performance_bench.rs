@@ -361,7 +361,7 @@ fn isolated_config(cfg: &AppConfig, port: u16) -> AppConfig {
 
 // Preserve argv length and positions so typed occurrence capture can align raw
 // option identities with sanitized values without ever retaining raw values.
-fn redacted_args(args: Vec<String>) -> Vec<String> {
+pub(crate) fn redacted_args(args: Vec<String>) -> Vec<String> {
     let mut hide_next = false;
     args.into_iter()
         .map(|argument| {

@@ -254,6 +254,7 @@ use persistence::write_accepted;
 pub use persistence::{
     accept, clear_supplement, entrypoint_baseline, load_accepted, load_supplement, save_supplement,
 };
+pub(crate) use redaction::mask_argv_for_stored_runtime;
 pub use redaction::{mask_argv, mask_config, sensitive_keys, stored_sensitive_keys, REDACTED};
 
 #[cfg(test)]

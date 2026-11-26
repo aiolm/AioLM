@@ -19,6 +19,7 @@ function serving(rows: PerformanceBenchmarkRow[]): ServingPerformanceBenchmarkRe
   record.result.rows = rows;
   record.result.args = ['--threads', '8', '--credential', 'PRIVATE-TOKEN'];
   record.result.engine_args = ['/private/engine', '--credential', 'PRIVATE-ENGINE-TOKEN'];
+  record.result.engine_args_error = 'PRIVATE-ENGINE-CAPTURE-ERROR';
   const provenance = defined(record.result.provenance);
   provenance.app_version = '0.3.5';
   provenance.recorded_model_label = 'Recorded-label';

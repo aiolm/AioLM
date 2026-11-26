@@ -604,6 +604,37 @@ fn update_result(record: &mut Option<Value>, result: Value) -> Result<(), String
     Ok(())
 }
 
+fn hydrate_legacy_engine_args(record: &mut Value) {
+    hydrate_legacy_engine_args_with_registry(&crate::providers::registry::root(), record);
+}
+
+fn hydrate_legacy_engine_args_with_registry(registry_root: &Path, record: &mut Value) {
+    let Some(result) = record.get_mut("result").and_then(Value::as_object_mut) else {
+        return;
+    };
+    if result.contains_key("engine_args") || result.contains_key("engine_args_error") {
+        return;
+    }
+    let Some(args) = result.get("args").and_then(Value::as_array) else {
+        return;
+    };
+    let Some(args) = args
+        .iter()
+        .map(Value::as_str)
+        .map(|value| value.map(str::to_owned))
+        .collect::<Option<Vec<String>>>()
+    else {
+        return;
+    };
+    if let Some(engine_args) =
+        crate::providers::runtime_auto::engine_command_from_helper_argv(registry_root, &args)
+    {
+        if !engine_args.is_empty() {
+            result.insert("engine_args".into(), json!(engine_args));
+        }
+    }
+}
+
 pub(crate) fn list(root: &Path, offset: usize, limit: usize) -> Result<HistoryPage, AppError> {
     let _lock = StoreLock::acquire(root)?;
     let (active_digests, mut warnings) = locks::active_digests(root)?;
@@ -643,6 +674,7 @@ pub(crate) fn list(root: &Path, offset: usize, limit: usize) -> Result<HistoryPa
                 if let Err(error) = receipts::attach_state(root, &mut run.record) {
                     warnings.push(error);
                 }
+                hydrate_legacy_engine_args(&mut run.record);
                 records.push(run.record);
             }
             Err(error) => warnings.push(format!(
@@ -979,6 +1011,218 @@ mod tests {
             "synthetic capture failure"
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn hydrate_legacy_engine_args_populates_managed_and_preserves_existing() {
+        let area = root();
+        let registry_root = area.join("adapters");
+        let engine_dir = area.join("engine-files");
+        fs::create_dir_all(&engine_dir).unwrap();
+        let engine = fs::canonicalize(&area)
+            .unwrap()
+            .join("engine-files")
+            .join("synthetic-engine.exe");
+        let model = fs::canonicalize(&area)
+            .unwrap()
+            .join("engine-files")
+            .join("synthetic.gguf");
+        fs::write(&engine, b"engine").unwrap();
+        fs::write(&model, b"model").unwrap();
+        let clean_engine = crate::verbatim_path::strip_windows_verbatim_prefix(engine.clone())
+            .to_string_lossy()
+            .into_owned();
+        let clean_model = crate::verbatim_path::strip_windows_verbatim_prefix(model.clone())
+            .to_string_lossy()
+            .into_owned();
+
+        let engine_id = "custom.auto-0123456789abcdef";
+        let runtime_id = "connection-0123456789abcdef";
+        let conn_dir = registry_root.join(engine_id).join(runtime_id);
+        fs::create_dir_all(&conn_dir).unwrap();
+        let spec_path = conn_dir.join("connection.json");
+        fs::write(
+            &spec_path,
+            serde_json::to_vec(&json!({
+                "version": 1,
+                "engine_id": engine_id,
+                "runtime_id": runtime_id,
+                "target": {
+                    "kind": "managed",
+                    "launch": {
+                        "program": engine.to_string_lossy(),
+                        "args": ["serve", "--model", "{model}", "--port={port}", "--host={host}"],
+                        "env": {},
+                        "working_directory": null
+                    },
+                    "artifacts": []
+                },
+                "model_path": model.to_string_lossy(),
+                "upstream_model": null,
+                "served_alias": "synthetic-alias"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let encoded_spec = base64::engine::Engine::encode(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            spec_path.to_string_lossy().as_bytes(),
+        );
+
+        let mut legacy = serving_record("legacy-hydrates", 10);
+        legacy["result"]["args"] = json!([
+            "/synthetic/aiolm",
+            crate::providers::runtime_auto::INTERNAL,
+            "serve",
+            encoded_spec,
+            clean_model,
+            "43210"
+        ]);
+        hydrate_legacy_engine_args_with_registry(&registry_root, &mut legacy);
+        assert_eq!(
+            legacy["result"]["engine_args"],
+            json!([
+                clean_engine,
+                "serve",
+                "--model",
+                clean_model,
+                "--port={port}",
+                "--host=127.0.0.1"
+            ])
+        );
+
+        // Existing engine_args or engine_args_error must never be overwritten.
+        let mut already_present = legacy.clone();
+        already_present["result"]["engine_args"] = json!(["/synthetic/recorded-engine"]);
+        hydrate_legacy_engine_args_with_registry(&registry_root, &mut already_present);
+        assert_eq!(
+            already_present["result"]["engine_args"],
+            json!(["/synthetic/recorded-engine"])
+        );
+
+        let mut with_error = serving_record("legacy-error", 11);
+        with_error["result"]["args"] = legacy["result"]["args"].clone();
+        with_error["result"]["engine_args_error"] = json!("original capture error");
+        hydrate_legacy_engine_args_with_registry(&registry_root, &mut with_error);
+        assert!(with_error["result"].get("engine_args").is_none());
+        assert_eq!(
+            with_error["result"]["engine_args_error"],
+            "original capture error"
+        );
+
+        fs::remove_dir_all(area).unwrap();
+    }
+
+    #[test]
+    fn list_hydrates_legacy_engine_args_without_modifying_journal_bytes() {
+        const CHILD: &str = "AIOLM_BENCHMARK_LEGACY_HYDRATE_FIXTURE";
+        const FILTER: &str =
+            "benchmark::store::tests::list_hydrates_legacy_engine_args_without_modifying_journal_bytes";
+        if std::env::var_os(CHILD).is_none() {
+            let area = root();
+            let mut command = crate::procutil::std_command(std::env::current_exe().unwrap());
+            command
+                .args(["--exact", FILTER, "--nocapture", "--test-threads=1"])
+                .env(CHILD, &area)
+                .env("AIOLM_HOME", area.join("aiolm home"));
+            let output = crate::procutil::capture_output_cancellable(
+                &mut command,
+                std::time::Duration::from_secs(45),
+                256 * 1024,
+                None,
+            )
+            .unwrap();
+            assert!(
+                output.status.success(),
+                "isolated legacy hydration fixture failed:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .any(|line| line.starts_with("test result: ok. 1 passed; 0 failed;")));
+            fs::remove_dir_all(area).unwrap();
+            return;
+        }
+
+        let area = PathBuf::from(std::env::var_os(CHILD).unwrap());
+        let engine_dir = area.join("engine-files");
+        fs::create_dir_all(&engine_dir).unwrap();
+        let engine = engine_dir.join("synthetic-engine.exe");
+        let model = engine_dir.join("synthetic.gguf");
+        fs::write(&engine, b"engine").unwrap();
+        fs::write(&model, b"model").unwrap();
+
+        let reg_root = crate::providers::registry::root();
+        let engine_id = "custom.auto-abcdef0123456789";
+        let runtime_id = "connection-abcdef0123456789";
+        let conn_dir = reg_root.join(engine_id).join(runtime_id);
+        fs::create_dir_all(&conn_dir).unwrap();
+        let spec_path = conn_dir.join("connection.json");
+        fs::write(
+            &spec_path,
+            serde_json::to_vec(&json!({
+                "version": 1,
+                "engine_id": engine_id,
+                "runtime_id": runtime_id,
+                "target": {
+                    "kind": "managed",
+                    "launch": {
+                        "program": engine.to_string_lossy(),
+                        "args": ["serve", "--model", "{model}", "--port", "{port}", "--host", "{host}"],
+                        "env": {},
+                        "working_directory": null
+                    },
+                    "artifacts": []
+                },
+                "model_path": model.to_string_lossy(),
+                "upstream_model": null,
+                "served_alias": "synthetic-alias"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let encoded_spec = base64::engine::Engine::encode(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            spec_path.to_string_lossy().as_bytes(),
+        );
+
+        let bench_root = area.join("bench-store");
+        let journal = RunJournal::begin(&bench_root, serving_record("legacy-disk", 10)).unwrap();
+        let mut result = serving_result("legacy-disk");
+        result.args = vec![
+            "/synthetic/aiolm".into(),
+            crate::providers::runtime_auto::INTERNAL.into(),
+            "serve".into(),
+            encoded_spec,
+            model.to_string_lossy().into_owned(),
+            "43210".into(),
+        ];
+        result.rows.push(serving_row());
+        result.status = "complete";
+        result.message = None;
+        journal.finish(&result).unwrap();
+        let journal_path = journal.path.clone();
+        drop(journal);
+
+        let before = fs::read(&journal_path).unwrap();
+        let page = list(&bench_root, 0, 20).unwrap();
+        assert_eq!(page.records.len(), 1);
+        assert_eq!(
+            page.records[0]["result"]["engine_args"],
+            json!([
+                engine.to_string_lossy(),
+                "serve",
+                "--model",
+                model.to_string_lossy(),
+                "--port",
+                "{port}",
+                "--host",
+                "127.0.0.1"
+            ])
+        );
+        assert!(page.records[0]["result"].get("engine_args_error").is_none());
+        assert_eq!(fs::read(&journal_path).unwrap(), before);
     }
     #[test]
     fn usage_downgrade_is_durable_before_any_trial_and_after_completion() {

@@ -792,10 +792,17 @@ describe("Performance benchmark workflow", () => {
   });
 
   it("shows only the helper command and says why for an automatic run recorded without the engine command", async () => {
-    mocked.runPerformanceBench.mockImplementation(async (_cfg, request) => ({
-      ...result(request.run_id, [row()]),
-      args: ["/synthetic/aiolm", "--internal-runtime-auto", "serve", "/synthetic/connection.json", "--", "aiolm-auto-argv-v1", '{"version":1}'],
-    }));
+    mocked.runPerformanceBench.mockImplementation(async (_cfg, request) => {
+      const base = result(request.run_id, [row()]);
+      return {
+        ...base,
+        provenance: {
+          ...base.provenance!,
+          execution: { ...base.provenance!.execution, topology: "owned" },
+        },
+        args: ["/synthetic/aiolm", "--internal-runtime-auto", "serve", "/synthetic/connection.json", "--", "aiolm-auto-argv-v1", '{"version":1}'],
+      };
+    });
     renderPanel();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
@@ -810,6 +817,30 @@ describe("Performance benchmark workflow", () => {
     );
     expect(within(details).queryByRole("combobox", { name: "Command" })).not.toBeInTheDocument();
     expect(within(details).getByText(/does not include the command that runs the inference engine directly/)).toBeVisible();
+    expect(within(details).queryByText(/connected to an already-running server/)).not.toBeInTheDocument();
+  });
+
+  it("explains attached proxy helper runs instead of suggesting a re-run", async () => {
+    mocked.runPerformanceBench.mockImplementation(async (_cfg, request) => {
+      const base = result(request.run_id, [row()]);
+      return {
+        ...base,
+        provenance: {
+          ...base.provenance!,
+          execution: { ...base.provenance!.execution, topology: "attached" },
+        },
+        args: ["/synthetic/aiolm", "--internal-runtime-auto", "serve", "/synthetic/connection.json", "/synthetic/model-reference.json", "43210"],
+      };
+    });
+    renderPanel();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
+    const summary = await screen.findByText("Launch command");
+    const details = summary.closest("details")!;
+    fireEvent.click(summary);
+    expect(within(details).queryByRole("combobox", { name: "Command" })).not.toBeInTheDocument();
+    expect(within(details).getByText(/connected to an already-running server through AioLM's proxy helper/)).toBeVisible();
+    expect(within(details).queryByText(/does not include the command that runs the inference engine directly/)).not.toBeInTheDocument();
   });
 
   it("keeps current and history exports separate when the new result could not be saved", async () => {
