@@ -12,7 +12,7 @@
 ./aiolm-cli.exe models delete <path>
 ./aiolm-cli.exe runtime list   # `runtimes` も別名として使用可能
 ./aiolm-cli.exe runtime discover [folder]
-./aiolm-cli.exe runtime connect <candidate-id> <model-id> [folder] [--command <word>]...
+./aiolm-cli.exe runtime connect <candidate-id> [folder] [--command <word>]...
 ./aiolm-cli.exe runtime device
 ./aiolm-cli.exe runtime probe <backend> <build>
 ./aiolm-cli.exe runtime select <backend> <build>
@@ -52,7 +52,7 @@
 
 `runtime discover [folder]` は現在のユーザーのローカルモデル API を探し、フォルダーを指定した場合はそのインストールフォルダー内のエントリーポイントも探します。候補プログラムは実行しません。JSON レポートには `candidates`（各候補の `id`、`display_name`、`source`、`entrypoint_kind`、`endpoints`、`state`）、`warnings`、`truncated` が含まれます。
 
-`runtime connect <candidate-id> <model-id> [folder] [--command <word>]...` は候補を再検出して調べ、選択したモデルのチャットとストリーミング応答を検証して登録を保存します。検出結果の候補 ID を使い、フォルダーを指定して検出した場合は同じフォルダーを渡してください。フォルダー内のインストールでは、モデル ID は設定済みのモデルカタログにあるローカルモデルのパスです。実行中の API では、そのサーバーが提供するモデル ID を使います。接続時にプログラムを実行したりローカルサーバーにリクエストを送ったりするため、信頼できるインストールだけを選んでください。接続前にヘッドレスサーバーを停止してください。
+`runtime connect <candidate-id> [folder] [--command <word>]...` は候補を再検出して調べ、モデルを指定せずに登録を保存します。検出結果の候補 ID を使い、フォルダーを指定して検出した場合は同じフォルダーを渡してください。AioLM が起動するエンジンは、その後設定済みのモデルカタログのどのモデルでも起動できます。実行中の API では、そのサーバーが提供するすべてのモデルが登録されます。各モデルのチャットとストリーミング応答は、そのモデルを初めて起動するときに検証します。接続時にプログラムを実行（ヘルプの確認）したりローカルサーバーにリクエストを送ったりするため、信頼できるインストールだけを選んでください。接続前にヘッドレスサーバーを停止してください。
 
 文書化されたサービングコマンドを選ぶには、単語ごとに `--command` を繰り返します。例は `--command serve --command llm` です。複数のサービングコマンドが見つかった場合はエラーに選択肢が表示されるので、いずれかを指定して接続を再実行してください。登録しても選択中のランタイムやモデルは変わりません。
 

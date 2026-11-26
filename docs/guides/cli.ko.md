@@ -12,7 +12,7 @@
 ./aiolm-cli.exe models delete <path>
 ./aiolm-cli.exe runtime list   # `runtimes`도 별칭으로 사용 가능
 ./aiolm-cli.exe runtime discover [folder]
-./aiolm-cli.exe runtime connect <candidate-id> <model-id> [folder] [--command <word>]...
+./aiolm-cli.exe runtime connect <candidate-id> [folder] [--command <word>]...
 ./aiolm-cli.exe runtime device
 ./aiolm-cli.exe runtime probe <backend> <build>
 ./aiolm-cli.exe runtime select <backend> <build>
@@ -52,7 +52,7 @@
 
 `runtime discover [folder]`는 현재 사용자의 로컬 모델 API를 찾고, 폴더를 지정하면 해당 설치 폴더의 진입점도 찾습니다. 후보 프로그램은 실행하지 않습니다. JSON 보고서에는 `candidates`(각 후보의 `id`, `display_name`, `source`, `entrypoint_kind`, `endpoints`, `state`), `warnings`, `truncated`가 포함됩니다.
 
-`runtime connect <candidate-id> <model-id> [folder] [--command <word>]...`는 후보를 다시 검색하고 검사한 뒤, 선택한 모델의 채팅 및 스트리밍 응답을 검증하고 등록을 저장합니다. 검색 결과의 후보 ID를 사용하고, 폴더를 지정해 검색했다면 같은 폴더를 전달하세요. 폴더 설치의 모델 ID는 설정된 모델 카탈로그에 있는 로컬 모델 경로이며, 실행 중인 API에는 해당 서버가 제공하는 모델 ID를 사용합니다. 연결 과정에서 프로그램을 실행하거나 로컬 서버에 요청을 보낼 수 있으므로 신뢰하는 설치만 선택하세요. 연결 전에 헤드리스 서버를 중지하세요.
+`runtime connect <candidate-id> [folder] [--command <word>]...`는 후보를 다시 검색하고 검사한 뒤, 모델을 지정하지 않고 등록을 저장합니다. 검색 결과의 후보 ID를 사용하고, 폴더를 지정해 검색했다면 같은 폴더를 전달하세요. AioLM이 실행하는 엔진은 이후 설정된 모델 카탈로그의 어떤 모델로든 시작할 수 있고, 실행 중인 API는 해당 서버가 제공하는 모든 모델이 등록됩니다. 각 모델의 채팅 및 스트리밍 응답은 그 모델을 처음 시작할 때 검증합니다. 연결 과정에서 프로그램을 실행(도움말 확인)하거나 로컬 서버에 요청을 보낼 수 있으므로 신뢰하는 설치만 선택하세요. 연결 전에 헤드리스 서버를 중지하세요.
 
 문서화된 서빙 명령을 선택하려면 단어마다 `--command`를 반복하세요. 예를 들어 `--command serve --command llm`을 사용합니다. 서빙 명령이 여러 개라면 오류에 선택지가 표시되므로, 그중 하나를 지정해 연결을 다시 실행하세요. 등록은 선택한 런타임이나 모델을 변경하지 않습니다.
 

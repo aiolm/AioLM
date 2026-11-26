@@ -972,8 +972,8 @@ describe('neutral inference engine inventory', () => {
       plan: 'synthetic-opaque-token', detail: 'Synthetic discovery evidence',
     };
     const connected: runtimeAuto.AutomaticRuntimeResult = {
-      engine_id: 'custom.synthetic', runtime_id: 'build-1', display_name: 'Synthetic', model_path: '/synthetic/model-reference.json',
-      mode: 'attached', checks: ['model-identity', 'chat-response', 'sse-stream'],
+      engine_id: 'custom.synthetic', runtime_id: 'build-1', display_name: 'Synthetic',
+      mode: 'attached', checks: ['model-list'],
     };
     let finish!: (result: runtimeAuto.AutomaticRuntimeResult) => void;
     vi.mocked(runtimeAuto.runtimeAutoDiscover).mockResolvedValueOnce({ candidates: [candidate], warnings: [], truncated: false });
@@ -991,7 +991,7 @@ describe('neutral inference engine inventory', () => {
     expect(runtimeAuto.runtimeAutoInspect).toHaveBeenCalledExactlyOnceWith(candidate);
     fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
     try {
-      expect(runtimeAuto.runtimeAutoConnect).toHaveBeenCalledExactlyOnceWith(prepared, 'synthetic-model');
+      expect(runtimeAuto.runtimeAutoConnect).toHaveBeenCalledExactlyOnceWith(prepared);
       await waitFor(() => expect(onBusyChange).toHaveBeenLastCalledWith(true));
       expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
       expect(screen.queryByRole('group', { name: /is registered/ })).not.toBeInTheDocument();

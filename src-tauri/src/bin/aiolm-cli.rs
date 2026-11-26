@@ -1551,7 +1551,7 @@ fn help_value() -> Value {
             "models delete <path>":"delete a non-active GGUF/mmproj file, or an app-downloaded snapshot folder (only the files its manifest lists; other files stay)",
             "runtime list":"list built-in and registered external engine installations",
             "runtime discover [folder]":"find current-user local model APIs and entry points in a selected folder without executing candidates",
-            "runtime connect <candidate-id> <model-id> [folder] [--command <word>]...":"rediscover, inspect and verify one common automatic connection, then save its registration; --command words select one documented serving command such as `serve llm`",
+            "runtime connect <candidate-id> [folder] [--command <word>]...":"rediscover and inspect one common automatic connection, then save its registration without choosing a model (each model is checked when it first starts); --command words select one documented serving command such as `serve llm`",
             "runtime register-manifest <json>":"probe and register a versioned external process adapter; engine files stay external",
             "runtime select <custom.engine> <id>":"select a registered engine without replacing its files",
             "runtime probe <custom.engine> <id>":"probe the exact active model on an external adapter",
@@ -1594,7 +1594,6 @@ enum CliCommand {
     },
     RuntimeConnect {
         candidate: String,
-        model: String,
         folder: Option<String>,
         command: Vec<String>,
     },
@@ -1641,14 +1640,14 @@ enum CliCommand {
 }
 
 const RUNTIME_CONNECT_USAGE: &str =
-    "usage: runtime connect <candidate-id> <model-id> [folder] [--command <word>]...";
+    "usage: runtime connect <candidate-id> [folder] [--command <word>]...";
 
 /// `--command` words name one documented serving command in order
 /// (`--command serve --command llm`); one other argument is the folder.
 fn parse_runtime_connect(args: &[String]) -> Result<CliCommand, String> {
     let mut folder = None;
     let mut command = Vec::new();
-    let mut rest = args[4..].iter();
+    let mut rest = args[3..].iter();
     while let Some(arg) = rest.next() {
         if arg == "--command" {
             command.push(rest.next().ok_or(RUNTIME_CONNECT_USAGE)?.clone());
@@ -1660,7 +1659,6 @@ fn parse_runtime_connect(args: &[String]) -> Result<CliCommand, String> {
     }
     Ok(CliCommand::RuntimeConnect {
         candidate: args[2].clone(),
-        model: args[3].clone(),
         folder,
         command,
     })
@@ -1694,7 +1692,7 @@ fn parse_command(args: &[String]) -> Result<CliCommand, String> {
         "runtime" | "runtimes" => match args.get(1).map(String::as_str) {
             Some("list") if args.len() == 2 => Ok(CliCommand::RuntimesList),
             Some("discover") if (2..=3).contains(&args.len()) => Ok(CliCommand::RuntimeDiscover { folder: args.get(2).cloned() }),
-            Some("connect") if args.len() >= 4 => parse_runtime_connect(args),
+            Some("connect") if args.len() >= 3 => parse_runtime_connect(args),
             Some("discover") => Err("usage: runtime discover [folder]".into()),
             Some("connect") => Err(RUNTIME_CONNECT_USAGE.into()),
             Some("register-manifest") if args.len() == 3 => Ok(CliCommand::RuntimeAdapterRegister { manifest: args[2].clone() }),
@@ -1763,7 +1761,6 @@ async fn run(args: &[String]) -> Result<Value, String> {
         }
         CliCommand::RuntimeConnect {
             candidate,
-            model,
             folder,
             command,
         } => {
@@ -1776,7 +1773,7 @@ async fn run(args: &[String]) -> Result<Value, String> {
             let cancel = aiolm_lib::providers::runtime_auto::cancellation();
             cancel.store(false, Ordering::Release);
             let work = async {
-                use aiolm_lib::providers::{artifacts::ArtifactRole, runtime_auto};
+                use aiolm_lib::providers::runtime_auto;
                 let report = runtime_auto::discover(folder.as_deref().map(Path::new)).await?;
                 let candidate = report
                     .candidates
@@ -1785,35 +1782,9 @@ async fn run(args: &[String]) -> Result<Value, String> {
                     .ok_or(
                         "the candidate changed or is unavailable; discover the installation again",
                     )?;
-                let local_models = if candidate.endpoints.is_empty() {
-                    let worker_cancel = cancel.clone();
-                    tokio::task::spawn_blocking(move || {
-                        let cfg = config::load_result()?;
-                        let catalog =
-                            aiolm_lib::scan_model_catalog(&cfg.models_dir, &worker_cancel, None)?;
-                        Ok::<_, String>(
-                            catalog
-                                .models
-                                .into_iter()
-                                .filter(|model| model.artifact.role == ArtifactRole::Model)
-                                .map(|model| runtime_auto::ModelChoice {
-                                    id: model.artifact.path,
-                                    name: model.artifact.name,
-                                })
-                                .collect(),
-                        )
-                    })
-                    .await
-                    .map_err(|error| error.to_string())??
-                } else {
-                    vec![]
-                };
-                let prepared = runtime_auto::inspect(
-                    &candidate,
-                    local_models,
-                    (!command.is_empty()).then_some(command),
-                )
-                .await?;
+                let prepared =
+                    runtime_auto::inspect(&candidate, (!command.is_empty()).then_some(command))
+                        .await?;
                 if prepared.kind == "choose_command" {
                     let choices = prepared
                         .commands
@@ -1833,7 +1804,7 @@ async fn run(args: &[String]) -> Result<Value, String> {
                         "this program documents several commands that can serve a model; repeat with one of: {choices}"
                     ));
                 }
-                runtime_auto::connect(&prepared, &model, cancel.clone())
+                runtime_auto::connect(&prepared, cancel.clone())
                     .await
                     .map_err(Into::into)
             };
@@ -2357,18 +2328,20 @@ mod tests {
                 folder: Some("folder with spaces".into())
             })
         );
+        // Connecting never names a model; sessions choose one later.
         assert_eq!(
-            parse(&[
-                "runtime",
-                "connect",
-                "opaque-id",
-                "model name 눈길",
-                "folder with spaces"
-            ]),
+            parse(&["runtime", "connect", "opaque-id"]),
             Ok(CliCommand::RuntimeConnect {
                 candidate: "opaque-id".into(),
-                model: "model name 눈길".into(),
-                folder: Some("folder with spaces".into()),
+                folder: None,
+                command: vec![],
+            })
+        );
+        assert_eq!(
+            parse(&["runtime", "connect", "opaque-id", "folder with spaces 눈길"]),
+            Ok(CliCommand::RuntimeConnect {
+                candidate: "opaque-id".into(),
+                folder: Some("folder with spaces 눈길".into()),
                 command: vec![],
             })
         );
@@ -2377,7 +2350,6 @@ mod tests {
                 "runtime",
                 "connect",
                 "opaque-id",
-                "model",
                 "--command",
                 "serve",
                 "folder",
@@ -2386,18 +2358,17 @@ mod tests {
             ]),
             Ok(CliCommand::RuntimeConnect {
                 candidate: "opaque-id".into(),
-                model: "model".into(),
                 folder: Some("folder".into()),
                 command: vec!["serve".into(), "text".into()],
             })
         );
         for invalid in [
-            &["runtime", "connect", "opaque-id", "model", "--command"][..],
-            &["runtime", "connect", "opaque-id", "model", "a", "b"][..],
+            &["runtime", "connect", "opaque-id", "--command"][..],
+            &["runtime", "connect", "opaque-id", "a", "b"][..],
         ] {
             assert!(parse(invalid).is_err(), "{invalid:?}");
         }
-        assert!(parse(&["runtime", "connect", "opaque-id"]).is_err());
+        assert!(parse(&["runtime", "connect"]).is_err());
         assert_eq!(
             parse(&[
                 "runtime",

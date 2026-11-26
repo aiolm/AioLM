@@ -25,7 +25,7 @@ const prepared: api.PreparedRuntimeConnection = {
 };
 const connected: api.AutomaticRuntimeResult = {
   engine_id: 'custom.synthetic', runtime_id: 'example-connection', display_name: candidate.display_name,
-  model_path: '/synthetic/app/connection-model.json', mode: 'attached', checks: ['JSON response checked', 'Complete streaming response checked'],
+  mode: 'attached', checks: ['model-list'],
 };
 
 beforeEach(() => {
@@ -56,21 +56,22 @@ it('waits for explicit discovery and exposes no IDs, executable or setup-file fi
   expect(screen.getByText(/do not need to pick an executable or configuration file/)).toBeInTheDocument();
 });
 
-it('inspects a sole discovery automatically, then waits for actual verification before claiming success', async () => {
+it('inspects a sole discovery automatically, then connects without a model choice and waits for the backend before claiming success', async () => {
   let resolve!: (result: api.AutomaticRuntimeResult) => void;
   vi.mocked(api.runtimeAutoConnect).mockReturnValue(new Promise(done => { resolve = done; }));
   const { onConnected } = show();
   await find();
   expect(api.runtimeAutoInspect).toHaveBeenCalledExactlyOnceWith(candidate);
-  expect(screen.queryByText('Connection verified.')).not.toBeInTheDocument();
+  expect(screen.queryByText('Connected.')).not.toBeInTheDocument();
   expect(screen.getByText(/Disconnecting in AioLM leaves the original server running/)).toBeInTheDocument();
+  expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
-  expect(api.runtimeAutoConnect).toHaveBeenCalledExactlyOnceWith(prepared, 'sample-model');
-  expect(screen.getByText('Testing model responses and streaming…')).toBeInTheDocument();
+  expect(api.runtimeAutoConnect).toHaveBeenCalledExactlyOnceWith(prepared);
+  expect(screen.getByText('Saving the connection…')).toBeInTheDocument();
   expect(onConnected).not.toHaveBeenCalled();
   await act(async () => resolve(connected));
   expect(onConnected).toHaveBeenCalledExactlyOnceWith(connected);
-  expect(screen.getByText('Connection verified.')).toBeInTheDocument();
+  expect(screen.getByText('Connected.')).toBeInTheDocument();
   expect(screen.getByText(/you do not need to create a settings file/)).toBeInTheDocument();
   expect(screen.getAllByText(/does not verify image, audio, video, tool use, or response quality/).length).toBeGreaterThan(0);
 });
@@ -143,7 +144,7 @@ it('does not start discovery when the folder dialog is dismissed', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Choose installation folder' }));
   await waitFor(() => expect(screen.getByRole('button', { name: 'Find automatically' })).toBeEnabled());
   expect(api.runtimeAutoDiscover).not.toHaveBeenCalled();
-  expect(screen.queryByText('Connection verified.')).not.toBeInTheDocument();
+  expect(screen.queryByText('Connected.')).not.toBeInTheDocument();
 });
 
 it('keeps empty and truncated discovery honest and offers the folder fallback', async () => {
@@ -161,7 +162,7 @@ it('shows an inspection failure and does not offer an unverified connection', as
   vi.mocked(api.runtimeAutoInspect).mockRejectedValue(new Error('No supported API was observed.'));
   show();
   fireEvent.click(screen.getByRole('button', { name: 'Find automatically' }));
-  expect(await screen.findByRole('alert')).toHaveTextContent('The connection could not be verified.');
+  expect(await screen.findByRole('alert')).toHaveTextContent('The engine could not be connected.');
   expect(screen.getByRole('alert')).toHaveTextContent('No supported API was observed.');
   expect(screen.queryByRole('button', { name: 'Connect' })).not.toBeInTheDocument();
   expect(api.runtimeAutoConnect).not.toHaveBeenCalled();
@@ -189,17 +190,16 @@ it('identifies inspection failure when a single discovery was inspected automati
   expect(screen.queryByRole('button', { name: 'Connect' })).not.toBeInTheDocument();
 });
 
-it('requires a choice when several models are available', async () => {
-  vi.mocked(api.runtimeAutoInspect).mockResolvedValue({ ...prepared, models: [...prepared.models, { id: 'other-model', name: 'Other model' }] });
+it('lists every model a running server provides and connects all of them without asking for a choice', async () => {
+  const inspected = { ...prepared, models: [...prepared.models, { id: 'other-model', name: 'Other model' }] };
+  vi.mocked(api.runtimeAutoInspect).mockResolvedValue(inspected);
   show();
-  fireEvent.click(screen.getByRole('button', { name: 'Find automatically' }));
-  const model = await screen.findByRole('combobox', { name: 'Model to use' });
-  await waitFor(() => expect(model).toBeEnabled());
-  expect(screen.getByRole('button', { name: 'Connect' })).toBeDisabled();
-  fireEvent.click(model);
-  fireEvent.click(screen.getByRole('option', { name: 'Other model' }));
+  await find();
+  expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+  const served = screen.getByRole('list', { name: 'Models this server provides' });
+  expect(within(served).getAllByRole('listitem').map(item => item.textContent)).toEqual(['Sample model', 'Other model']);
   fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
-  await waitFor(() => expect(api.runtimeAutoConnect).toHaveBeenCalledWith(expect.anything(), 'other-model'));
+  await waitFor(() => expect(api.runtimeAutoConnect).toHaveBeenCalledExactlyOnceWith(inspected));
 });
 
 it.each([
@@ -208,25 +208,43 @@ it.each([
   ['org/model', 'org/model'],
   ['org/model-00005-of-00004.gguf', 'org/model-00005-of-00004.gguf'],
   ['org/model-00001-of-00004.bin', 'org/model-00001-of-00004.bin'],
-])('displays the model label without changing the selected connection ID %s', async (id, label) => {
+])('displays the served model label without changing the connection ID %s', async (id, label) => {
   const inspected = { ...prepared, models: [...prepared.models, { id, name: id }] };
   vi.mocked(api.runtimeAutoInspect).mockResolvedValue(inspected);
   show();
-  fireEvent.click(screen.getByRole('button', { name: 'Find automatically' }));
-  const picker = await screen.findByRole('combobox', { name: 'Model to use' });
-  await waitFor(() => expect(picker).toBeEnabled());
-  fireEvent.click(picker);
-  fireEvent.click(screen.getByRole('option', { name: label }));
-  expect(picker).toHaveTextContent(label);
+  await find();
+  const served = screen.getByRole('list', { name: 'Models this server provides' });
+  expect(within(served).getByText(label)).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
-  await waitFor(() => expect(api.runtimeAutoConnect).toHaveBeenCalledExactlyOnceWith(inspected, id));
+  await waitFor(() => expect(api.runtimeAutoConnect).toHaveBeenCalledExactlyOnceWith(inspected));
 });
 
-it('blocks connect if no model can be selected', async () => {
+it('connects a managed launch without any model and explains the first-start check', async () => {
+  const installed = { ...candidate, source: 'selected_folder' as const, endpoints: [], pid: null, process_identity: null };
+  const managed = { ...prepared, kind: 'managed' as const, candidate: installed, models: [], base_url: null, command: ['serve', 'llm'] };
+  vi.mocked(api.runtimeAutoDiscover).mockResolvedValue({ candidates: [installed], warnings: [], truncated: false });
+  vi.mocked(api.runtimeAutoInspect).mockResolvedValue(managed);
+  vi.mocked(api.runtimeAutoConnect).mockResolvedValue({ ...connected, mode: 'managed', checks: ['launch-command'] });
+  show();
+  fireEvent.click(screen.getByRole('button', { name: 'Choose installation folder' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Check selected item' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Check selected item' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Connect' })).toBeEnabled());
+  expect(screen.getByText(/you can start it with any model in your library/)).toBeInTheDocument();
+  expect(screen.getByText(/tested the first time it starts/)).toBeInTheDocument();
+  expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+  expect(screen.queryByRole('list', { name: 'Models this server provides' })).not.toBeInTheDocument();
+  expect(screen.queryByText(/This server provides no models/)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+  await waitFor(() => expect(api.runtimeAutoConnect).toHaveBeenCalledExactlyOnceWith(managed));
+  expect(await screen.findByText('Connected.')).toBeInTheDocument();
+});
+
+it('blocks connect when a running server provides no model', async () => {
   vi.mocked(api.runtimeAutoInspect).mockResolvedValue({ ...prepared, models: [] });
   show();
   fireEvent.click(screen.getByRole('button', { name: 'Find automatically' }));
-  expect(await screen.findByText(/No model is available to select/)).toBeInTheDocument();
+  expect(await screen.findByText(/This server provides no models/)).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Connect' })).toBeDisabled();
 });
 
@@ -241,17 +259,17 @@ it('rejects duplicate activation before React renders its busy state', async () 
   await act(async () => resolve(connected));
 });
 
-it('keeps a failed model verification out of the connected state and allows a retry', async () => {
+it('keeps a failed connection out of the connected state and allows a retry', async () => {
   vi.mocked(api.runtimeAutoConnect).mockRejectedValueOnce(new Error('The stream ended without a completion event.'));
   const { onConnected } = show();
   await find();
   fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
   expect(await screen.findByRole('alert')).toHaveTextContent('The stream ended without a completion event.');
-  expect(screen.queryByText('Connection verified.')).not.toBeInTheDocument();
+  expect(screen.queryByText('Connected.')).not.toBeInTheDocument();
   expect(onConnected).not.toHaveBeenCalled();
   expect(screen.getByRole('button', { name: 'Connect' })).toBeEnabled();
   fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
-  expect(await screen.findByText('Connection verified.')).toBeInTheDocument();
+  expect(await screen.findByText('Connected.')).toBeInTheDocument();
   expect(onConnected).toHaveBeenCalledExactlyOnceWith(connected);
 });
 
@@ -265,7 +283,7 @@ it('cancels once and ignores a late verification result', async () => {
   expect(api.runtimeAutoCancel).toHaveBeenCalledTimes(1);
   await act(async () => resolve(connected));
   expect(onConnected).not.toHaveBeenCalled();
-  expect(screen.queryByText('Connection verified.')).not.toBeInTheDocument();
+  expect(screen.queryByText('Connected.')).not.toBeInTheDocument();
   expect(screen.getByText('The operation was cancelled.')).toBeInTheDocument();
 });
 
@@ -362,7 +380,7 @@ it('discards a cancelled inspection and can recheck the same candidate', async (
   vi.mocked(api.runtimeAutoInspect).mockReturnValueOnce(new Promise(done => { resolve = done; }));
   show();
   fireEvent.click(screen.getByRole('button', { name: 'Find automatically' }));
-  await screen.findByText('Checking the launch method and models…');
+  await screen.findByText('Checking the launch method…');
   fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
   await act(async () => resolve(prepared));
   expect(screen.getByText('The operation was cancelled.')).toBeInTheDocument();
@@ -373,7 +391,7 @@ it('discards a cancelled inspection and can recheck the same candidate', async (
   expect(api.runtimeAutoInspect).toHaveBeenCalledTimes(2);
 });
 
-it('clears the inspected model when choosing another candidate and requires checking it', async () => {
+it('clears the inspected connection when choosing another candidate and requires checking it', async () => {
   const second = { ...candidate, id: 'other-service', display_name: 'Other service' };
   vi.mocked(api.runtimeAutoDiscover).mockResolvedValue({ candidates: [candidate, second], warnings: [], truncated: false });
   show();
@@ -387,11 +405,11 @@ it('clears the inspected model when choosing another candidate and requires chec
   expect(api.runtimeAutoConnect).not.toHaveBeenCalled();
 });
 
-it('keeps a successful per-model registration from being rechecked in place', async () => {
+it('keeps a successful registration from being rechecked in place', async () => {
   show();
   await find();
   fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
-  await screen.findByText('Connection verified.');
+  await screen.findByText('Connected.');
   expect(screen.getByRole('button', { name: 'Check selected item' })).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Connect another item' })).toBeEnabled();
 });

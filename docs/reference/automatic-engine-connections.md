@@ -15,8 +15,8 @@ expanded details kept.
 
 1. Open **Inference engines → Add inference engine → Find automatically**.
 2. Tell the discovered items apart by their source, entry-point path and listener
-   address. Select one, choose **Check selected item**, then select a model.
-   A sole running server is checked automatically. A sole item from an
+   address. Select one and choose **Check selected item**. You do not choose a
+   model here. A sole running server is checked automatically. A sole item from an
    installation folder is only preselected, because checking it runs the
    program; choose **Check selected item** to check it. After a failed or
    cancelled check, **Check selected item** checks it again without repeating
@@ -29,11 +29,15 @@ expanded details kept.
    documents, with `--help` only. When several commands can serve a model,
    **Launch command** lists them with the program's own descriptions; choose
    one and **Check selected command**. The chosen command is shown above the
-   model selection.
-3. Choose **Connect**. AioLM registers the engine only after the selected model
-   answers a chat request and completes a streaming response. Your existing
-   model settings and profiles do not change; choose the new engine and model in
-   a settings profile to use them.
+   **Connect** button.
+3. Choose **Connect**. AioLM saves the connection without binding it to a model.
+   An engine that AioLM launches can then be started with any model in your
+   library. For a running server, every model it lists is shown before
+   connecting and registered in the library; a server that lists no models
+   cannot be connected. Each model's chat request and complete streaming
+   response are checked the first time that model starts with the engine. Your
+   existing model settings and profiles do not change; choose the new engine and
+   a model in a settings profile to use them.
 
 This flow needs no JSON files or probe programs.
 
@@ -43,8 +47,12 @@ the affected sessions and offers **Open Library** to stop or cancel them. A
 separate runtime-operation notice explains locks not owned by a model session.
 
 The progress indicator identifies the operation that failed: discovery,
-inspection or connection verification. A failed rediscovery does not discard an
-already inspected candidate and its model selection.
+inspection or saving the connection. A failed rediscovery does not discard an
+already inspected candidate.
+
+Connections made by earlier versions, which were verified with one selected
+model, also start with any other library model; the originally verified model
+keeps its served name.
 
 ### Names, options and background loading
 
@@ -54,10 +62,10 @@ binary version. Engine names resolve on app startup without first opening engine
 management or settings. Split GGUF models have one display name without the shard
 counter; the original first-shard path is still used to open the model.
 
-A managed connection serves the model under that display name without the file
-extension, so an external client's model list shows the model name instead of an
-internal connection ID. An attached server keeps the identifier the server itself
-advertises.
+A managed connection serves each model under its own display name without the
+file extension, so an external client's model list shows the model name instead
+of an internal connection ID. An attached server keeps the identifier the server
+itself advertises.
 
 For an AioLM-managed connection, model settings show options from the selected
 engine command's own help. Existing connections discover this help when their
@@ -116,10 +124,11 @@ model. Changed engine files or model files require fresh model evidence.
   then other launchable images (for example GUI programs or a static PIE), then
   items that cannot be started as they are; within each group, files closer to
   the selected folder come first. Folder items are listed before running servers.
-- A running server must answer an OpenAI `/v1` model-list request, and the
-  selected model must pass a regular chat request and a complete streaming
-  response. This establishes text chat and streaming only. It confirms that
-  requests reach the selected model name; it is not proof of which weight files
+- A running server must answer an OpenAI `/v1` model-list request to be
+  connected. When a model first starts with any connected engine, it must pass a
+  regular chat request and a complete streaming response. This establishes text
+  chat and streaming only. It confirms that requests reach the selected model
+  name; it is not proof of which weight files
   the server loaded, and it does not certify images, audio, tools or answer
   quality. Each sample allows up to 1024 completion tokens so a reasoning
   model can finish thinking before its visible answer; both samples together
@@ -130,8 +139,9 @@ model. Changed engine files or model files require fresh model evidence.
 - A stopped installation can be started by AioLM only when it has a discoverable
   entry point (or an explicitly declared interpreter) and documented, unambiguous
   arguments for the model, host and port, on the entry point itself or on one
-  documented command at most three levels deep. A trial launch must confirm the
-  model routing and that the listener belongs to the process AioLM started.
+  documented command at most three levels deep. Connecting reads the command's
+  help only; the first launch of each model must confirm the model routing and
+  that the listener belongs to the process AioLM started.
   The engine has up to 7 minutes to load the model and start serving. If it
   exits first, the error shows the end of the engine's own output.
 - AioLM records checksums of the engine's executable, scripts and connection

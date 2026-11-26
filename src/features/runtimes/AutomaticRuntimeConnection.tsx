@@ -8,7 +8,6 @@ import { useI18n } from '../../shared/i18n/i18n';
 import { runtimeAutoCopy } from '../../shared/i18n/runtimeAutoCopy';
 import { formatModelLabel, normalizeDisplayText } from '../../shared/lib/displayPaths';
 import { finishTask, registerTask, updateTask } from '../../shared/state/taskRegistry';
-import { CustomSelect } from '../../shared/ui/CustomSelect';
 import DiagnosticDetails, { summarizeDiagnostic } from '../../shared/ui/DiagnosticDetails';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { LocalTaskCancelButton } from '../../shared/ui/TaskCancellation';
@@ -21,7 +20,8 @@ function DoneIcon() {
 }
 
 /** A discovery result is only a candidate. The backend owns launch decisions,
- * model checks and publication; the UI never manufactures a ready adapter. */
+ * per-model checks and publication; the UI never manufactures a ready adapter
+ * and never asks for a model: sessions choose one when they start. */
 export default function AutomaticRuntimeConnection({ locked, onConnected, onBusyChange, titleRef }: {
   locked: boolean;
   onConnected: (result: AutomaticRuntimeResult) => void;
@@ -40,7 +40,6 @@ export default function AutomaticRuntimeConnection({ locked, onConnected, onBusy
   const [warnings, setWarnings] = useState<string[]>([]);
   const [truncated, setTruncated] = useState(false);
   const [prepared, setPrepared] = useState<PreparedRuntimeConnection | null>(null);
-  const [model, setModel] = useState('');
   // Serving commands the selected program documents, when it lists several.
   const [choices, setChoices] = useState<LaunchCommand[]>([]);
   const [choice, setChoice] = useState('');
@@ -102,11 +101,10 @@ export default function AutomaticRuntimeConnection({ locked, onConnected, onBusy
 
   const applyInspection = (next: PreparedRuntimeConnection) => {
     if (next.kind === 'choose_command') {
-      setChoices(next.commands ?? []); setChoice(''); setPrepared(null); setModel('');
+      setChoices(next.commands ?? []); setChoice(''); setPrepared(null);
       return;
     }
     setPrepared(next);
-    setModel(next.models.length === 1 ? next.models[0]?.id ?? '' : '');
   };
   const clearChoices = () => { setChoices([]); setChoice(''); };
   const search = (chooseFolder = false) => execute('finding', async current => {
@@ -119,7 +117,7 @@ export default function AutomaticRuntimeConnection({ locked, onConnected, onBusy
     const found = await runtimeAutoDiscover(folder);
     if (!current()) return;
     setCandidates(found.candidates); setWarnings(found.warnings); setTruncated(found.truncated);
-    setSearched(true); setSelected(''); setPrepared(null); setModel(''); clearChoices();
+    setSearched(true); setSelected(''); setPrepared(null); clearChoices();
     const [candidate] = found.candidates;
     if (found.candidates.length === 1 && candidate) {
       setSelected(candidate.id);
@@ -133,27 +131,28 @@ export default function AutomaticRuntimeConnection({ locked, onConnected, onBusy
     }
   });
   const inspect = (candidate: RuntimeCandidate, command?: string[]) => execute('inspecting', async current => {
-    setSelected(candidate.id); setPrepared(null); setModel('');
+    setSelected(candidate.id); setPrepared(null);
     if (!command) clearChoices();
     const next = await (command ? runtimeAutoInspect(candidate, command) : runtimeAutoInspect(candidate));
     if (current()) applyInspection(next);
   });
   const chooseCandidate = (candidate: RuntimeCandidate) => {
     if (locked || running.current) return;
-    setSelected(candidate.id); setPrepared(null); setModel(''); clearChoices();
+    setSelected(candidate.id); setPrepared(null); clearChoices();
     setError(null); setCancelled(false); setResult(null);
   };
   const chooseCommand = (key: string) => {
     if (locked || running.current) return;
-    setChoice(key); setPrepared(null); setModel('');
+    setChoice(key); setPrepared(null);
     setError(null); setCancelled(false); setResult(null);
   };
+  // An attached server with no listed model has nothing to register.
+  const connectable = prepared !== null && (prepared.kind !== 'attached' || prepared.models.length > 0);
   const connect = () => {
-    if (!prepared || !model || !prepared.models.some(item => item.id === model)) return;
+    if (!prepared || !connectable) return;
     const connection = prepared;
-    const selectedModel = model;
     return execute('connecting', async current => {
-      const connected = await runtimeAutoConnect(connection, selectedModel);
+      const connected = await runtimeAutoConnect(connection);
       if (!current()) return;
       setResult(connected);
       callbacks.current.onConnected(connected);
@@ -162,16 +161,15 @@ export default function AutomaticRuntimeConnection({ locked, onConnected, onBusy
   const disabled = locked || phase !== null;
   const selectedCandidate = candidates.find(candidate => candidate.id === selected);
   const chosenCommand = choices.find(item => item.path.join(' ') === choice);
-  // The visible journey: find → inspect a candidate → choose a model → verify.
-  // Verification is complete only once runtimeAutoConnect itself succeeded.
+  // The visible journey: find → inspect a candidate → save the connection.
+  // No model is chosen here; each model is checked when it first starts.
   const displayedPhase = phase ?? error?.phase;
-  const stage = result ? 4
+  const stage = result ? 3
     : displayedPhase === 'finding' ? 0
       : displayedPhase === 'inspecting' ? 1
-        : displayedPhase === 'connecting' ? 3
-          : prepared ? (model ? 3 : 2)
-            : candidates.length > 0 ? 1 : 0;
-  const steps = [copy.stepFind, copy.stepCheck, copy.stepModel, copy.stepVerify];
+        : displayedPhase === 'connecting' || prepared ? 2
+          : candidates.length > 0 ? 1 : 0;
+  const steps = [copy.stepFind, copy.stepCheck, copy.stepConnect];
 
   return <section className="app-card runtime-auto" aria-labelledby={`${id}-title`}>
     <div className="runtime-auto__header">
@@ -245,16 +243,16 @@ export default function AutomaticRuntimeConnection({ locked, onConnected, onBusy
     {prepared && <form action="#" method="POST" className="runtime-auto-stage runtime-auto-connect" onSubmit={event => { event.preventDefault(); void connect(); }}>
       <p>{prepared.kind === 'attached' ? copy.attached : copy.managed}</p>
       {prepared.command && prepared.command.length > 0 && <p className="app-section-hint">{copy.launchCommand}: <code>{prepared.command.join(' ')}</code></p>}
-      <div className="runtime-auto-field">
-        <label htmlFor={`${id}-model`}>{copy.model}</label>
-        <CustomSelect id={`${id}-model`} value={model} disabled={disabled || prepared.models.length === 0}
-          options={[{ value: '', label: copy.chooseModel }, ...prepared.models.map(item => ({ value: item.id, label: formatModelLabel(item.name) }))]}
-          onChange={setModel} />
-      </div>
-      {prepared.models.length === 0 && <FeedbackBanner tone="warning">{copy.noModels}</FeedbackBanner>}
-      <p className="app-section-hint">{copy.limits}</p>
+      {prepared.kind === 'attached' && prepared.models.length > 0 && <div className="runtime-auto-field">
+        <span id={`${id}-models`}>{copy.servedModels}</span>
+        <ul aria-labelledby={`${id}-models`} className="mt-1 list-disc pl-5">
+          {prepared.models.map(item => <li key={item.id}>{formatModelLabel(item.name)}</li>)}
+        </ul>
+      </div>}
+      {prepared.kind === 'attached' && prepared.models.length === 0 && <FeedbackBanner tone="warning">{copy.noModels}</FeedbackBanner>}
+      <p className="app-section-hint">{copy.modelCheck} {copy.limits}</p>
       <div className="app-page-actions">
-        <button type="submit" className="app-button app-button--primary" disabled={disabled || !model || result !== null}>{copy.connect}</button>
+        <button type="submit" className="app-button app-button--primary" disabled={disabled || !connectable || result !== null}>{copy.connect}</button>
       </div>
     </form>}
     {error && <FeedbackBanner tone="error" title={copy.failure}>

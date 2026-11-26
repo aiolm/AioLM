@@ -12,7 +12,7 @@
 ./aiolm-cli.exe models delete <path>
 ./aiolm-cli.exe runtime list   # `runtimes` 也可作为别名
 ./aiolm-cli.exe runtime discover [folder]
-./aiolm-cli.exe runtime connect <candidate-id> <model-id> [folder] [--command <word>]...
+./aiolm-cli.exe runtime connect <candidate-id> [folder] [--command <word>]...
 ./aiolm-cli.exe runtime device
 ./aiolm-cli.exe runtime probe <backend> <build>
 ./aiolm-cli.exe runtime select <backend> <build>
@@ -52,7 +52,7 @@
 
 `runtime discover [folder]` 查找当前用户的本地模型 API；若提供文件夹，还会查找该安装文件夹内的入口点，但不会执行候选程序。JSON 报告包含 `candidates`（各候选项的 `id`、`display_name`、`source`、`entrypoint_kind`、`endpoints` 和 `state`）、`warnings` 和 `truncated`。
 
-`runtime connect <candidate-id> <model-id> [folder] [--command <word>]...` 会重新发现并检查候选项，验证所选模型的聊天和流式响应，然后保存注册。使用发现结果中的候选 ID；若发现时指定了文件夹，请传入同一文件夹。对于文件夹内的安装，模型 ID 是已配置模型目录中本地模型的路径；对于运行中的 API，请使用该服务器提供的模型 ID。连接时可能运行程序或向本地服务器发送请求，因此请仅选择可信的安装。连接前请停止无界面服务器。
+`runtime connect <candidate-id> [folder] [--command <word>]...` 会重新发现并检查候选项，然后在不指定模型的情况下保存注册。使用发现结果中的候选 ID；若发现时指定了文件夹，请传入同一文件夹。由 AioLM 启动的引擎之后可以使用已配置模型目录中的任意模型启动；对于运行中的 API，会注册该服务器提供的所有模型。每个模型的聊天和流式响应会在该模型首次启动时验证。连接时可能运行程序（读取其帮助）或向本地服务器发送请求，因此请仅选择可信的安装。连接前请停止无界面服务器。
 
 要选择文档中列出的服务命令，请为每个单词重复一次 `--command`，例如 `--command serve --command llm`。若发现多个服务命令，错误信息会列出选项；请指定其中一个并重新连接。注册不会更改当前选定的运行时或模型。
 

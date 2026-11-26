@@ -287,11 +287,19 @@ async fn automatic_cli_connection_verifies_and_registers_an_independent_service_
         "public CLI discovery must not print captured process arguments"
     );
     let id = candidate["id"].as_str().unwrap();
-    let connected = cli(&home.path, &["runtime", "connect", id, MODEL]).await;
+    // Connecting names no model: the server's listed model is registered in
+    // the library and chosen like any other model afterwards.
+    let connected = cli(&home.path, &["runtime", "connect", id]).await;
     assert_eq!(connected["mode"], "attached");
+    assert!(connected.get("model_path").is_none());
     let engine = connected["engine_id"].as_str().unwrap();
     let runtime = connected["runtime_id"].as_str().unwrap();
-    let model_path = connected["model_path"].as_str().unwrap();
+    let registered =
+        providers::registry::manifest(providers::ProviderId::parse(engine).unwrap(), runtime)
+            .unwrap();
+    assert_eq!(registered.models.len(), 1);
+    assert_eq!(registered.models[0].name, MODEL);
+    let model_path = registered.models[0].path.as_str();
     cli(&home.path, &["runtime", "select", engine, runtime]).await;
     cli(&home.path, &["config", "set", "active_model", model_path]).await;
     let reservation = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();

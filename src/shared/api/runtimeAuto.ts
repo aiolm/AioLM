@@ -37,9 +37,11 @@ export interface LaunchCommand {
 
 export interface PreparedRuntimeConnection {
   /** `choose_command`: several documented commands can serve a model; inspect
-   * again with one of `commands` before any model is offered. */
+   * again with one of `commands` before connecting. */
   kind: 'attached' | 'managed' | 'choose_command';
   candidate: RuntimeCandidate;
+  /** Models an attached server lists; every one is registered. Empty for a
+   * managed launch, which serves whichever library model a session starts. */
   models: Array<{ id: string; name: string }>;
   detail: string;
   base_url: string | null;
@@ -54,7 +56,6 @@ export interface AutomaticRuntimeResult {
   engine_id: ProviderId;
   runtime_id: string;
   display_name: string;
-  model_path: string;
   mode: 'attached' | 'managed';
   checks: string[];
 }
@@ -67,8 +68,10 @@ export function runtimeAutoInspect(candidate: RuntimeCandidate, command?: string
   return invoke('runtime_auto_inspect', { candidate, command: command ?? null });
 }
 
-export function runtimeAutoConnect(prepared: PreparedRuntimeConnection, modelId: string): Promise<AutomaticRuntimeResult> {
-  return invoke('runtime_auto_connect', { prepared, modelId });
+/** Registers the engine without choosing a model; each model is checked when
+ * a session first starts it. */
+export function runtimeAutoConnect(prepared: PreparedRuntimeConnection): Promise<AutomaticRuntimeResult> {
+  return invoke('runtime_auto_connect', { prepared });
 }
 
 export function runtimeAutoCancel(): Promise<boolean> {

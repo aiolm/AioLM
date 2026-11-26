@@ -12,7 +12,7 @@ Installers ship `aiolm-cli` next to the desktop app; on Windows, find `aiolm-cli
 ./aiolm-cli.exe models delete <path>
 ./aiolm-cli.exe runtime list  # `runtimes` is also accepted
 ./aiolm-cli.exe runtime discover [folder]
-./aiolm-cli.exe runtime connect <candidate-id> <model-id> [folder] [--command <word>]...
+./aiolm-cli.exe runtime connect <candidate-id> [folder] [--command <word>]...
 ./aiolm-cli.exe runtime device
 ./aiolm-cli.exe runtime probe <backend> <build>
 ./aiolm-cli.exe runtime select <backend> <build>
@@ -51,7 +51,7 @@ See [SECURITY.md](../SECURITY.md) for auth and process boundaries.
 
 `runtime discover [folder]` finds current-user local model APIs and, when a folder is supplied, entry points in that installation folder without executing candidates. Its JSON report includes `candidates` (with each candidate's `id`, `display_name`, `source`, `entrypoint_kind`, `endpoints`, and `state`), `warnings`, and `truncated`.
 
-`runtime connect <candidate-id> <model-id> [folder] [--command <word>]...` rediscovers the candidate, inspects it, verifies the selected model's chat and streaming responses, and saves its registration. Use the candidate ID from discovery and supply the same folder if one was used. For a folder installation, the model ID is a local model path from the configured model catalog; for a running API, use its served model ID. Connecting may run the program or send requests to the local server, so choose installations you trust. Stop the headless server before connecting.
+`runtime connect <candidate-id> [folder] [--command <word>]...` rediscovers the candidate, inspects it, and saves its registration without choosing a model. Use the candidate ID from discovery and supply the same folder if one was used. An engine AioLM launches can then start any model in the configured catalog; for a running API, every model it lists is registered. Each model's chat and streaming responses are verified the first time it starts. Connecting may run the program (to read its help) or send requests to the local server, so choose installations you trust. Stop the headless server before connecting.
 
 Repeat `--command` once per word to select a documented serving command, for example `--command serve --command llm`. If several serving commands are found, the error lists the choices; repeat the connection with one of them. Registration does not change the selected runtime or model.
 

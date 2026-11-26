@@ -38,36 +38,15 @@ pub(crate) async fn runtime_auto_inspect(
     command: Option<Vec<String>>,
 ) -> Result<auto::PreparedConnection, crate::error::AppError> {
     let _operation = Operation::acquire()?;
-    let local_models = if candidate.endpoints.is_empty() {
-        let cancel = auto::cancellation();
-        tokio::task::spawn_blocking(move || {
-            let cfg = crate::config::load_result()?;
-            let catalog = super::providers::inspect_catalog(&cfg.models_dir, &cancel, None)?;
-            Ok::<_, crate::error::AppError>(
-                catalog
-                    .models
-                    .into_iter()
-                    .filter(|m| m.artifact.role == crate::providers::artifacts::ArtifactRole::Model)
-                    .map(|m| auto::ModelChoice {
-                        id: m.artifact.path,
-                        name: m.artifact.name,
-                    })
-                    .collect(),
-            )
-        })
-        .await
-        .map_err(crate::error::AppError::from)??
-    } else {
-        vec![]
-    };
-    auto::inspect(&candidate, local_models, command).await
+    auto::inspect(&candidate, command).await
 }
 
+/// Connecting registers the engine without choosing a model; sessions pick
+/// any library model later and each is checked when it first starts.
 #[tauri::command]
 pub(crate) async fn runtime_auto_connect(
     state: State<'_, AppState>,
     prepared: auto::PreparedConnection,
-    model_id: String,
 ) -> Result<auto::ConnectedRuntime, crate::error::AppError> {
     let _operation = Operation::acquire()?;
     let _busy = super::runtimes::RuntimeBusyGuard::acquire(&state.runtime_busy)?;
@@ -77,7 +56,7 @@ pub(crate) async fn runtime_auto_connect(
             "stop model sessions before connecting another runtime",
         ));
     }
-    auto::connect(&prepared, &model_id, auto::cancellation()).await
+    auto::connect(&prepared, auto::cancellation()).await
 }
 
 #[tauri::command]

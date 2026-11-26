@@ -19,6 +19,8 @@ use std::{
 pub const INTERNAL: &str = "--internal-runtime-auto";
 const KEY_ENV: &str = "AIO_CONNECT_KEY";
 const SPEC_LIMIT: u64 = 262_144;
+/// The registry's model-binding limit for one runtime registration.
+const MAX_ATTACHED_MODELS: usize = 128;
 /// Loading a large local model can take minutes. Readiness plus verification
 /// fits the 600 s that session start waits for the helper it launches.
 const MANAGED_READY_SECS: u64 = 420;
@@ -54,7 +56,6 @@ pub struct ConnectedRuntime {
     pub engine_id: ProviderId,
     pub runtime_id: String,
     pub display_name: String,
-    pub model_path: String,
     pub mode: String,
     pub checks: Vec<String>,
 }
@@ -69,6 +70,14 @@ enum Target {
         artifacts: Vec<String>,
     },
 }
+/// One model a running server lists, bound to the app-owned reference file
+/// that stands for it in the model library.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AttachedModel {
+    reference: String,
+    model: String,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ConnectionSpec {
@@ -76,16 +85,57 @@ struct ConnectionSpec {
     engine_id: ProviderId,
     runtime_id: String,
     target: Target,
+    /// Managed connections are not bound to one model: new ones leave this
+    /// empty and launch whichever library model is selected. Older managed
+    /// connections keep the model they were first verified with here, which
+    /// only decides that model's served alias. Attached connections hold the
+    /// first model reference.
+    #[serde(default)]
     model_path: String,
     upstream_model: Option<String>,
-    /// Readable served-model name for managed launches, derived from the
-    /// library display name at connection time. Registrations without it keep
-    /// the connection-scoped `aiolm-<runtime id>` identifier.
+    /// Readable served-model name of `model_path` for older managed
+    /// connections. Registrations without it keep the connection-scoped
+    /// `aiolm-<runtime id>` identifier for that model.
     #[serde(default)]
     served_alias: Option<String>,
+    /// Every model an attached server listed when it was connected, in
+    /// order; the first repeats `model_path` and `upstream_model`. Older
+    /// attached connections leave it empty and serve only `upstream_model`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    attached_models: Vec<AttachedModel>,
 }
 
 impl ConnectionSpec {
+    /// The (reference, upstream model) pairs an attached connection serves.
+    fn attached_models(&self) -> Vec<AttachedModel> {
+        if !self.attached_models.is_empty() {
+            return self.attached_models.clone();
+        }
+        self.upstream_model
+            .iter()
+            .map(|model| AttachedModel {
+                reference: self.model_path.clone(),
+                model: model.clone(),
+            })
+            .collect()
+    }
+    /// Served model name for a managed launch of `model`. The model an older
+    /// connection was verified with keeps its stored name; any other model is
+    /// served under its own readable file name.
+    fn managed_alias(&self, model: &str) -> String {
+        let legacy = || format!("aiolm-{}", self.runtime_id);
+        if !self.model_path.is_empty()
+            && crate::verbatim_path::same_verbatim_stripped_path(model, &self.model_path)
+        {
+            return self.served_alias.clone().unwrap_or_else(legacy);
+        }
+        let clean = crate::verbatim_path::strip_windows_verbatim_prefix_str(model);
+        Path::new(clean.as_ref())
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(readable_served_alias)
+            .unwrap_or_else(legacy)
+    }
     fn compute_ownership(&self) -> super::protocol::ComputeOwnership {
         match self.target {
             Target::Attached { .. } => super::protocol::ComputeOwnership::Attached,
@@ -212,9 +262,11 @@ fn known_candidate(
     Ok(known.clone())
 }
 
+/// The engine is connected without choosing a model. A managed launch serves
+/// whichever library model a session selects; an attached server's own model
+/// list is shown for review and every listed model is registered.
 pub async fn inspect(
     candidate: &discovery::RuntimeCandidate,
-    local_models: Vec<ModelChoice>,
     command: Option<Vec<String>>,
 ) -> Result<PreparedConnection, crate::error::AppError> {
     let candidate = known_candidate(candidate)?;
@@ -262,9 +314,11 @@ pub async fn inspect(
         ));
     }
     let (kind, models, detail, base_url, target, command) = if let Some(endpoint) = found.pop() {
+        let mut unique = std::collections::BTreeSet::new();
         let models = endpoint
             .models
             .into_iter()
+            .filter(|model| valid_upstream_model(&model.id) && unique.insert(model.id.clone()))
             .map(|model| ModelChoice {
                 name: model.id.clone(),
                 id: model.id,
@@ -300,7 +354,7 @@ pub async fn inspect(
             }
             super::runtime_auto_plan::PlanOutcome::Ready { plan, command } => {
                 let launch = plan.launch()?;
-                ("managed",local_models,"AioLM will test this installation with the selected model, then manage its own serving process.",None,Target::Managed {launch,artifacts:plan.artifacts.clone()},command.path)
+                ("managed",vec![],"AioLM manages its own serving process and launches whichever library model you start; each model is checked when it first starts.",None,Target::Managed {launch,artifacts:plan.artifacts.clone()},command.path)
             }
         }
     };
@@ -352,7 +406,14 @@ fn read_spec(path: &Path) -> Result<ConnectionSpec, crate::error::AppError> {
     }
     let spec: ConnectionSpec = serde_json::from_slice(&bytes)
         .map_err(|e| crate::error::AppError::validation(e.to_string()))?;
-    if spec.version != 1 || !spec.engine_id.is_custom() || spec.model_path.is_empty() {
+    let managed = matches!(spec.target, Target::Managed { .. });
+    if spec.version != 1
+        || !spec.engine_id.is_custom()
+        // Only a managed connection may be unbound from any model.
+        || (spec.model_path.is_empty() && !managed)
+        || (managed && !spec.attached_models.is_empty())
+        || spec.attached_models.len() > MAX_ATTACHED_MODELS
+    {
         return Err(crate::error::AppError::validation(
             "invalid automatic connection",
         ));
@@ -456,7 +517,6 @@ fn owned_spec(manifest: &registry::RuntimeManifest) -> Option<ConnectionSpec> {
         || manifest.probe.working_directory.is_some()
         || manifest.launch.env != BTreeMap::from([(KEY_ENV.into(), "{api_key}".into())])
         || manifest.launch.working_directory.is_some()
-        || manifest.models.len() != 1
         || !manifest.artifacts.contains(&expected)
         || !manifest.options.is_empty()
         || manifest.command_layout.is_some()
@@ -470,28 +530,44 @@ fn owned_spec(manifest: &registry::RuntimeManifest) -> Option<ConnectionSpec> {
     let Ok(spec) = read_spec(Path::new(&expected)) else {
         return None;
     };
-    if spec.engine_id != manifest.engine_id
-        || spec.runtime_id != manifest.runtime_id
-        || spec.model_path != manifest.models[0].path
-    {
+    if spec.engine_id != manifest.engine_id || spec.runtime_id != manifest.runtime_id {
         return None;
     }
     let mut expected_artifacts = std::collections::BTreeSet::from([expected.as_str()]);
     match &spec.target {
         Target::Attached { base_url } => {
+            let served = spec.attached_models();
+            // The first listed model is the legacy single-model contract.
             if probe::normalize_base_url(base_url).as_ref() != Ok(base_url)
-                || spec.model_path != directory.join("model-reference.json").to_string_lossy()
-                || !spec.upstream_model.as_deref().is_some_and(|model| {
-                    !model.trim().is_empty()
-                        && model.len() <= 2048
-                        && !model.chars().any(char::is_control)
+                || served.is_empty()
+                || served[0].reference != spec.model_path
+                || spec.upstream_model.as_ref() != Some(&served[0].model)
+                || manifest.models.len() != served.len()
+                || served.iter().enumerate().any(|(index, entry)| {
+                    entry.reference != attached_reference(&directory, index).to_string_lossy()
+                        || manifest.models[index].path != entry.reference
+                        || !valid_upstream_model(&entry.model)
                 })
+                || served
+                    .iter()
+                    .map(|entry| &entry.model)
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+                    != served.len()
             {
                 return None;
             }
         }
         Target::Managed { launch, artifacts } => {
-            if !valid_managed_launch(&spec, launch)
+            // New managed connections bind no model; an older one lists the
+            // model it was first verified with, which every launch may vary.
+            let bound = if spec.model_path.is_empty() {
+                manifest.models.is_empty()
+            } else {
+                manifest.models.len() == 1 && manifest.models[0].path == spec.model_path
+            };
+            if !bound
+                || !valid_managed_launch(&spec, launch)
                 || artifacts.len() > 256
                 || artifacts.iter().any(|path| !Path::new(path).is_absolute())
             {
@@ -515,8 +591,36 @@ fn owned_spec(manifest: &registry::RuntimeManifest) -> Option<ConnectionSpec> {
     Some(spec)
 }
 
+fn valid_upstream_model(model: &str) -> bool {
+    !model.trim().is_empty() && model.len() <= 2048 && !model.chars().any(char::is_control)
+}
+
+/// Library display name for an upstream model ID, within the registry's
+/// 256-byte name limit.
+fn bounded_model_name(model: &str) -> String {
+    let mut name = String::new();
+    for character in model.chars() {
+        if name.len() + character.len_utf8() > 256 {
+            break;
+        }
+        name.push(character);
+    }
+    name
+}
+
+/// App-owned library stand-in for the `index`th model of an attached server.
+/// The first keeps the single-model connection's file name.
+fn attached_reference(directory: &Path, index: usize) -> PathBuf {
+    if index == 0 {
+        directory.join("model-reference.json")
+    } else {
+        directory.join(format!("model-reference-{index}.json"))
+    }
+}
+
 fn valid_managed_launch(spec: &ConnectionSpec, launch: &registry::ProcessSpec) -> bool {
     spec.upstream_model.is_none()
+        && spec.attached_models.is_empty()
         && Path::new(&launch.program).is_absolute()
         && launch.env.is_empty()
         && launch.args.iter().any(|arg| has_binding(arg, "{model}"))
@@ -710,14 +814,13 @@ fn engine_command(
         return Ok(None);
     };
     let transport = option_transport(root, cfg, manifest)?;
-    let legacy_alias = format!("aiolm-{}", spec.runtime_id);
-    let alias = spec.served_alias.as_deref().unwrap_or(&legacy_alias);
+    let alias = spec.managed_alias(&cfg.active_model);
     let args = transported_arguments_with_port(
         launch,
         transport.as_ref(),
         &cfg.active_model,
         port,
-        alias,
+        &alias,
     )?;
     Ok(Some(
         std::iter::once(
@@ -732,7 +835,7 @@ fn engine_command(
 /// helper argv, strictly confining `connection.json` lookups inside
 /// `registry_root` and keeping `{port}` unexpanded rather than emitting the
 /// helper's front port. Returns `None` for non-helper commands, attached proxy
-/// targets, missing/foreign/invalid specs, or mismatched model paths.
+/// targets, missing/foreign/invalid specs, or a missing model argument.
 pub(crate) fn engine_command_from_helper_argv(
     registry_root: &Path,
     args: &[String],
@@ -803,17 +906,16 @@ pub(crate) fn engine_command_from_helper_argv(
         return None;
     }
     let model = &helper_args[3];
-    if !crate::verbatim_path::same_verbatim_stripped_path(model, &spec.model_path) {
+    if model.is_empty() {
         return None;
     }
-    let legacy_alias = format!("aiolm-{}", spec.runtime_id);
-    let alias = spec.served_alias.as_deref().unwrap_or(&legacy_alias);
+    let alias = spec.managed_alias(model);
     let expanded = transported_arguments_with_port(
         launch,
         transport.as_ref(),
         model,
         RECORDED_PORT_PLACEHOLDER,
-        alias,
+        &alias,
     )
     .ok()?;
     let argv = std::iter::once(
@@ -962,9 +1064,10 @@ fn transported_arguments_with_port(
         .collect()
 }
 
+/// Registers the inspected engine without binding it to a model. Each model is
+/// checked (identity, chat and streaming) when a session first starts it.
 pub async fn connect(
     prepared: &PreparedConnection,
-    model_id: &str,
     cancel: Arc<AtomicBool>,
 ) -> Result<ConnectedRuntime, crate::error::AppError> {
     let (_, known, target) = inventory()
@@ -976,10 +1079,21 @@ pub async fn connect(
         .ok_or_else(|| {
             crate::error::AppError::not_found("find the installation again before connecting")
         })?;
-    if known != *prepared || !known.models.iter().any(|m| m.id == model_id) {
+    if known != *prepared {
         return Err(crate::error::AppError::validation(
-            "connection or selected model changed; inspect it again",
+            "connection changed; inspect it again",
         ));
+    }
+    let attached = matches!(target, Target::Attached { .. });
+    if attached && known.models.is_empty() {
+        return Err(crate::error::AppError::validation(
+            "the running server lists no models to connect",
+        ));
+    }
+    if known.models.len() > MAX_ATTACHED_MODELS {
+        return Err(crate::error::AppError::validation(format!(
+            "the running server lists more than {MAX_ATTACHED_MODELS} models; serve fewer models and try again"
+        )));
     }
     check_cancel()?;
     discovery::revalidate_with_cancel(&known.candidate, &cancel)?;
@@ -993,39 +1107,49 @@ pub async fn connect(
     // Refuse collisions instead of opening or cleaning an older registration.
     fs::create_dir(&directory).map_err(|e| crate::error::AppError::from_io(&e))?;
     let spec_path = directory.join("connection.json");
-    let reference = directory.join("model-reference.json");
-    let attached = matches!(target, Target::Attached { .. });
-    let model_path = if attached {
-        reference.to_string_lossy().into_owned()
-    } else {
-        model_id.into()
-    };
-    // Managed connections serve the library display name so external clients
-    // see a readable model name instead of the opaque connection identity.
-    let served_alias = if attached {
-        None
-    } else {
+    // An attached server's models each get an app-owned library reference. A
+    // managed engine binds none: sessions launch it with any library model,
+    // served under that model's readable name.
+    let attached_models = if attached {
         known
             .models
             .iter()
-            .find(|model| model.id == model_id)
-            .and_then(|model| readable_served_alias(&model.name))
+            .enumerate()
+            .map(|(index, model)| AttachedModel {
+                reference: attached_reference(&directory, index)
+                    .to_string_lossy()
+                    .into_owned(),
+                model: model.id.clone(),
+            })
+            .collect::<Vec<_>>()
+    } else {
+        vec![]
     };
     let spec = ConnectionSpec {
         version: 1,
         engine_id: engine,
         runtime_id: runtime.clone(),
         target,
-        model_path: model_path.clone(),
-        upstream_model: attached.then(|| model_id.into()),
-        served_alias,
+        model_path: attached_models
+            .first()
+            .map(|entry| entry.reference.clone())
+            .unwrap_or_default(),
+        upstream_model: attached_models.first().map(|entry| entry.model.clone()),
+        served_alias: None,
+        // A single model is fully described by the legacy fields, which keeps
+        // the file readable by builds that predate multi-model connections.
+        attached_models: if attached_models.len() > 1 {
+            attached_models.clone()
+        } else {
+            vec![]
+        },
     };
     let result = async {
-        if attached {
+        for entry in &attached_models {
             crate::config::atomic_write(
-                &reference,
+                Path::new(&entry.reference),
                 &serde_json::to_vec(
-                    &serde_json::json!({"kind":"external-model-reference","model":model_id}),
+                    &serde_json::json!({"kind":"external-model-reference","model":entry.model}),
                 )
                 .map_err(|e| crate::error::AppError::internal(e.to_string()))?,
             )?;
@@ -1094,16 +1218,13 @@ pub async fn connect(
             option_metadata: None,
             options: vec![],
             model_formats: vec!["unknown".into()],
-            models: vec![registry::ModelBinding {
-                path: model_path.clone(),
-                name: known
-                    .models
-                    .iter()
-                    .find(|m| m.id == model_id)
-                    .unwrap()
-                    .name
-                    .clone(),
-            }],
+            models: attached_models
+                .iter()
+                .map(|entry| registry::ModelBinding {
+                    path: entry.reference.clone(),
+                    name: bounded_model_name(&entry.model),
+                })
+                .collect(),
             artifacts,
             health_path: "/health".into(),
             health_authenticated: false,
@@ -1112,23 +1233,20 @@ pub async fn connect(
         let cfg = crate::config::AppConfig {
             active_provider: engine.as_str().into(),
             active_runtime: runtime.clone(),
-            active_model: model_path.clone(),
             ..Default::default()
         };
         super::runtime_schema::ensure_automatic_help(&registry::root(), &cfg, &manifest, &cancel)?;
-        registry::refresh(&cfg, Some(cancel)).await?;
         check_cancel()?;
         Ok(ConnectedRuntime {
             engine_id: engine,
             runtime_id: runtime.clone(),
             display_name: known.candidate.display_name.clone(),
-            model_path: model_path.clone(),
             mode: known.kind.clone(),
-            checks: vec![
-                "model-identity".into(),
-                "chat-response".into(),
-                "sse-stream".into(),
-            ],
+            checks: if attached {
+                vec!["model-list".into()]
+            } else {
+                vec!["launch-command".into()]
+            },
         })
     }
     .await;
@@ -1136,8 +1254,8 @@ pub async fn connect(
         // Delete only this attempt's freshly allocated metadata, never engine files.
         let _ = registry::remove(engine, &runtime);
         let _ = fs::remove_file(&spec_path);
-        if attached {
-            let _ = fs::remove_file(&reference);
+        for entry in &attached_models {
+            let _ = fs::remove_file(&entry.reference);
         }
         let _ = fs::remove_dir(&directory);
         let _ = fs::remove_dir(directory.parent().unwrap());
@@ -1242,19 +1360,26 @@ async fn upstream(
     model: &str,
     transport: Option<&OptionTransport>,
 ) -> Result<(String, String, Option<ChildGuard>), crate::error::AppError> {
-    if !crate::verbatim_path::same_verbatim_stripped_path(model, &spec.model_path) {
+    if model.is_empty() {
         return Err(crate::error::AppError::validation(
-            "selected model differs from automatic connection",
+            "select a model to start with this engine",
         ));
     }
     match &spec.target {
-        Target::Attached { base_url } => Ok((
-            base_url.clone(),
-            spec.upstream_model
-                .clone()
-                .ok_or_else(|| crate::error::AppError::validation("missing upstream model"))?,
-            None,
-        )),
+        Target::Attached { base_url } => {
+            let served = spec
+                .attached_models()
+                .into_iter()
+                .find(|entry| {
+                    crate::verbatim_path::same_verbatim_stripped_path(model, &entry.reference)
+                })
+                .ok_or_else(|| {
+                    crate::error::AppError::validation(
+                        "the selected model is not one this running server listed when it was connected",
+                    )
+                })?;
+            Ok((base_url.clone(), served.model, None))
+        }
         Target::Managed { launch, .. } => {
             let socket = std::net::TcpListener::bind(("127.0.0.1", 0))
                 .map_err(|e| crate::error::AppError::from_io(&e))?;
@@ -1263,10 +1388,10 @@ async fn upstream(
                 .map_err(|e| crate::error::AppError::from_io(&e))?
                 .port();
             drop(socket);
-            // Older registrations without a stored readable name keep the
-            // connection-scoped identifier they were verified with.
-            let legacy_alias = format!("aiolm-{}", spec.runtime_id);
-            let alias = spec.served_alias.as_deref().unwrap_or(&legacy_alias);
+            // Any library model may be launched; it is served under its own
+            // readable name (older connections keep theirs for their model).
+            let alias = spec.managed_alias(model);
+            let alias = alias.as_str();
             let aliased = launch
                 .args
                 .iter()
@@ -1532,7 +1657,7 @@ mod tests {
             .candidates
             .insert(candidate.id.clone(), candidate.clone());
         cancellation().store(true, Ordering::Release);
-        let result = inspect(&candidate, vec![], None).await;
+        let result = inspect(&candidate, None).await;
         cancellation().store(false, Ordering::Release);
         inventory().lock().unwrap().candidates.remove(&candidate.id);
         let error = result.unwrap_err();
@@ -1562,12 +1687,7 @@ mod tests {
                 },
             ),
         );
-        let result = connect(
-            &prepared,
-            "synthetic-model",
-            Arc::new(AtomicBool::new(true)),
-        )
-        .await;
+        let result = connect(&prepared, Arc::new(AtomicBool::new(true))).await;
         inventory()
             .lock()
             .unwrap()
@@ -1700,20 +1820,13 @@ mod tests {
             let mut changed = prepared.clone();
             change(&mut changed);
             assert_eq!(
-                connect(&changed, "model-a", Arc::new(AtomicBool::new(true)))
+                connect(&changed, Arc::new(AtomicBool::new(true)))
                     .await
                     .unwrap_err()
                     .message,
-                "connection or selected model changed; inspect it again"
+                "connection changed; inspect it again"
             );
         }
-        assert_eq!(
-            connect(&prepared, "missing-model", Arc::new(AtomicBool::new(true)))
-                .await
-                .unwrap_err()
-                .message,
-            "connection or selected model changed; inspect it again"
-        );
         inventory()
             .lock()
             .unwrap()
@@ -1821,6 +1934,104 @@ mod tests {
         assert_eq!(spec.served_alias, None);
     }
 
+    fn managed_spec(model_path: &str, served_alias: Option<&str>) -> ConnectionSpec {
+        ConnectionSpec {
+            target: Target::Managed {
+                launch: registry::ProcessSpec {
+                    program: "/synthetic/engine".into(),
+                    args: vec![
+                        "--model".into(),
+                        "{model}".into(),
+                        "--port={port}".into(),
+                        "--host={host}".into(),
+                    ],
+                    env: BTreeMap::new(),
+                    working_directory: None,
+                },
+                artifacts: vec![],
+            },
+            model_path: model_path.into(),
+            upstream_model: None,
+            served_alias: served_alias.map(Into::into),
+            ..attached_spec(Path::new("/synthetic"))
+        }
+    }
+
+    #[test]
+    fn managed_connections_serve_any_model_under_its_own_name() {
+        let first = "/synthetic/models/First-Model-00001-of-00002.gguf";
+        let other = "/synthetic/models/Other Model:v2.gguf";
+        // A connection made before engines stopped binding a model keeps the
+        // name it was verified with for that model only.
+        let older = managed_spec(first, Some("First-Model"));
+        assert_eq!(older.managed_alias(first), "First-Model");
+        assert_eq!(older.managed_alias(other), "Other-Model-v2");
+        let legacy = managed_spec(first, None);
+        assert_eq!(
+            legacy.managed_alias(first),
+            "aiolm-connection-0123456789abcdef"
+        );
+        let unbound = managed_spec("", None);
+        assert_eq!(unbound.managed_alias(first), "First-Model");
+        assert_eq!(unbound.managed_alias(other), "Other-Model-v2");
+        assert_eq!(
+            unbound.managed_alias("/synthetic/models/model.gguf"),
+            "aiolm-connection-0123456789abcdef"
+        );
+    }
+
+    #[test]
+    fn only_managed_connections_may_omit_a_model() {
+        let area = Area::new();
+        let path = area.0.join("connection.json");
+        let unbound = managed_spec("", None);
+        fs::write(&path, serde_json::to_vec(&unbound).unwrap()).unwrap();
+        assert_eq!(read_spec(&path).unwrap().model_path, "");
+        let mut attached_list = unbound.clone();
+        attached_list.attached_models = vec![AttachedModel {
+            reference: "/synthetic/model-reference.json".into(),
+            model: "synthetic-model".into(),
+        }];
+        fs::write(&path, serde_json::to_vec(&attached_list).unwrap()).unwrap();
+        assert!(read_spec(&path).is_err());
+        let mut attached = attached_spec(&area.0);
+        attached.model_path.clear();
+        fs::write(&path, serde_json::to_vec(&attached).unwrap()).unwrap();
+        assert!(read_spec(&path).is_err());
+    }
+
+    #[tokio::test]
+    async fn attached_connections_route_each_listed_model_and_refuse_others() {
+        let directory = Path::new("/synthetic/connection");
+        let mut spec = attached_spec(directory);
+        spec.attached_models = ["synthetic-model", "second-model"]
+            .iter()
+            .enumerate()
+            .map(|(index, model)| AttachedModel {
+                reference: attached_reference(directory, index)
+                    .to_string_lossy()
+                    .into_owned(),
+                model: (*model).into(),
+            })
+            .collect();
+        for entry in spec.attached_models.clone() {
+            let (url, model, child) = upstream(&spec, &entry.reference, None).await.unwrap();
+            assert_eq!(url, "http://127.0.0.1:43121/v1");
+            assert_eq!(model, entry.model);
+            assert!(child.is_none());
+        }
+        let unknown = attached_reference(directory, 2);
+        assert!(upstream(&spec, &unknown.to_string_lossy(), None)
+            .await
+            .is_err());
+        assert!(upstream(&spec, "", None).await.is_err());
+        // An older single-model connection keeps serving its one model.
+        let legacy = attached_spec(directory);
+        let (_, model, _) = upstream(&legacy, &legacy.model_path, None).await.unwrap();
+        assert_eq!(model, "synthetic-model");
+        assert_eq!(bounded_model_name(&"가".repeat(200)).len(), 255);
+    }
+
     #[test]
     fn invalid_served_aliases_are_rejected_when_reading_a_connection() {
         let directory =
@@ -1856,6 +2067,7 @@ mod tests {
                 .into_owned(),
             upstream_model: Some("synthetic-model".into()),
             served_alias: None,
+            attached_models: vec![],
         }
     }
 
@@ -2106,6 +2318,40 @@ mod tests {
         changed.upstream_model = None;
         fs::write(&spec_path, serde_json::to_vec(&changed).unwrap()).unwrap();
         assert!(!is_owned_manifest(&manifest));
+
+        // A server listing several models registers each under its own
+        // app-owned reference, in order, without a model choice.
+        let mut several = attached.clone();
+        several.attached_models = ["synthetic-model", "second-model"]
+            .iter()
+            .enumerate()
+            .map(|(index, model)| AttachedModel {
+                reference: attached_reference(&directory, index)
+                    .to_string_lossy()
+                    .into_owned(),
+                model: (*model).into(),
+            })
+            .collect();
+        fs::write(&spec_path, serde_json::to_vec(&several).unwrap()).unwrap();
+        let mut several_manifest = manifest.clone();
+        several_manifest.models.push(registry::ModelBinding {
+            path: several.attached_models[1].reference.clone(),
+            name: "second-model".into(),
+        });
+        assert!(is_owned_manifest(&several_manifest));
+        // The library list must match the served list exactly.
+        assert!(!is_owned_manifest(&manifest));
+        let mut reordered = several_manifest.clone();
+        reordered.models.reverse();
+        assert!(!is_owned_manifest(&reordered));
+        let mut duplicate = several.clone();
+        duplicate.attached_models[1].model = "synthetic-model".into();
+        fs::write(&spec_path, serde_json::to_vec(&duplicate).unwrap()).unwrap();
+        assert!(!is_owned_manifest(&several_manifest));
+        let mut first_differs = several.clone();
+        first_differs.upstream_model = Some("second-model".into());
+        fs::write(&spec_path, serde_json::to_vec(&first_differs).unwrap()).unwrap();
+        assert!(!is_owned_manifest(&several_manifest));
         fs::write(&spec_path, serde_json::to_vec(&attached).unwrap()).unwrap();
 
         let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -2173,7 +2419,18 @@ mod tests {
         }
         fs::write(&spec_path, serde_json::to_vec(&public_bind).unwrap()).unwrap();
         assert!(!is_owned_manifest(&managed_manifest));
+        // A new managed connection binds no model at all; it may not list one
+        // in the library either.
+        let mut unbound = managed.clone();
+        unbound.model_path.clear();
+        unbound.served_alias = None;
+        fs::write(&spec_path, serde_json::to_vec(&unbound).unwrap()).unwrap();
+        let mut unbound_manifest = managed_manifest.clone();
+        assert!(!is_owned_manifest(&unbound_manifest));
+        unbound_manifest.models.clear();
+        assert!(is_owned_manifest(&unbound_manifest));
         fs::write(&spec_path, serde_json::to_vec(&managed).unwrap()).unwrap();
+        assert!(!is_owned_manifest(&unbound_manifest));
         for missing in [&engine, &script] {
             let mut changed = managed_manifest.clone();
             changed.artifacts.retain(|path| Path::new(path) != missing);
@@ -2628,6 +2885,7 @@ mod tests {
             model_path: verbatim_model.clone(),
             upstream_model: None,
             served_alias: Some("synthetic-model".into()),
+            attached_models: vec![],
         };
         fs::write(&spec_path, serde_json::to_vec(&spec).unwrap()).unwrap();
         let mut manifest = manifest_for(&spec, &helper);
@@ -2830,6 +3088,7 @@ mod tests {
             model_path: stored_model.clone(),
             upstream_model: None,
             served_alias: Some("synthetic-served-model".into()),
+            attached_models: vec![],
         };
         fs::write(&spec_path, serde_json::to_vec(&spec).unwrap()).unwrap();
 
@@ -3057,10 +3316,19 @@ mod tests {
             ]
         );
 
-        // 3. Rejections: mismatched model, malformed transport, probe subcommand, non-numeric port, non-helper args.
-        let mut wrong_model = basic_args.clone();
-        wrong_model[4] = engine_dir.join("other.gguf").to_string_lossy().into_owned();
-        assert!(engine_command_from_helper_argv(&registry_root, &wrong_model).is_none());
+        // 3. A connection is not bound to one model: another library model is
+        // reconstructed with its own readable served name.
+        let other = engine_dir.join("Other Model-00001-of-00002.gguf");
+        let mut other_model = basic_args.clone();
+        other_model[4] = other.to_string_lossy().into_owned();
+        let rebuilt = engine_command_from_helper_argv(&registry_root, &other_model).unwrap();
+        assert!(rebuilt.contains(&clean_path(&other)));
+        assert_eq!(rebuilt.last().map(String::as_str), Some("Other-Model"));
+
+        // 4. Rejections: missing model, malformed transport, probe subcommand, non-numeric port, non-helper args.
+        let mut no_model = basic_args.clone();
+        no_model[4] = String::new();
+        assert!(engine_command_from_helper_argv(&registry_root, &no_model).is_none());
 
         let mut bad_transport = transport_args.clone();
         bad_transport[7] = "{not-json".into();
@@ -3124,6 +3392,7 @@ mod tests {
             model_path: model_ref.clone(),
             upstream_model: Some("synthetic-upstream".into()),
             served_alias: None,
+            attached_models: vec![],
         };
         fs::write(
             &attached_spec_path,
