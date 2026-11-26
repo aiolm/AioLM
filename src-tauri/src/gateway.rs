@@ -127,15 +127,26 @@ impl GatewayHandle {
 
 const MAX_RESPONSES: usize = 128;
 
-/// Return one complete SSE line and advance a cursor without moving the
-/// buffered suffix. The caller compacts the consumed prefix once per chunk.
-fn take_sse_line<'a>(pending: &'a [u8], cursor: &mut usize) -> Option<&'a [u8]> {
-    let relative = pending[*cursor..].iter().position(|byte| *byte == b'\n')?;
-    let end = *cursor + relative;
+/// Return one complete SSE line and advance both the line start (`cursor`) and
+/// newline search cursor (`scan_from`) without rescanning bytes already known
+/// to contain no newline. The caller compacts the consumed prefix once per
+/// chunk and shifts `scan_from` by the drained length.
+fn take_sse_line<'a>(
+    pending: &'a [u8],
+    cursor: &mut usize,
+    scan_from: &mut usize,
+) -> Option<&'a [u8]> {
+    let start = (*scan_from).max(*cursor);
+    let Some(relative) = pending[start..].iter().position(|byte| *byte == b'\n') else {
+        *scan_from = pending.len();
+        return None;
+    };
+    let end = start + relative;
     let line = pending[*cursor..end]
         .strip_suffix(b"\r")
         .unwrap_or(&pending[*cursor..end]);
     *cursor = end + 1;
+    *scan_from = *cursor;
     Some(line)
 }
 
@@ -1784,6 +1795,7 @@ async fn stream_responses(
     let mut state = ResponseStreamState::default();
     let mut pending = Vec::new();
     let mut pending_cursor = 0;
+    let mut pending_scan_from = 0;
     let mut body_stream = response.bytes_stream();
     loop {
         let next = tokio::select! {
@@ -1802,13 +1814,15 @@ async fn stream_responses(
         if pending.len() > MAX_STREAM_PENDING_BYTES {
             return Err("upstream SSE line exceeded the 4 MiB limit".into());
         }
-        while let Some(line) = take_sse_line(&pending, &mut pending_cursor) {
+        while let Some(line) = take_sse_line(&pending, &mut pending_cursor, &mut pending_scan_from)
+        {
             if let Some(value) = parse_sse_value(line) {
                 write_events(stream, state.apply(&value)).await?;
             }
         }
         if pending_cursor > 0 {
             pending.drain(..pending_cursor);
+            pending_scan_from = pending_scan_from.saturating_sub(pending_cursor);
             pending_cursor = 0;
         }
     }
@@ -2048,6 +2062,7 @@ async fn stream_response(
     let mut parser = OpenAiStream::default();
     let mut pending = Vec::new();
     let mut pending_cursor = 0;
+    let mut pending_scan_from = 0;
     let mut body_stream = response.bytes_stream();
     while let Some(chunk) = unless_client_leaves(stream, body_stream.next()).await? {
         let chunk = chunk.map_err(|error| format!("upstream SSE read failed: {error}"))?;
@@ -2055,13 +2070,15 @@ async fn stream_response(
         if pending.len() > MAX_STREAM_PENDING_BYTES {
             return Err("upstream SSE line exceeded the 4 MiB limit".into());
         }
-        while let Some(line) = take_sse_line(&pending, &mut pending_cursor) {
+        while let Some(line) = take_sse_line(&pending, &mut pending_cursor, &mut pending_scan_from)
+        {
             if let Some(value) = parse_sse_value(line) {
                 write_events(stream, parser.apply(&value)).await?;
             }
         }
         if pending_cursor > 0 {
             pending.drain(..pending_cursor);
+            pending_scan_from = pending_scan_from.saturating_sub(pending_cursor);
             pending_cursor = 0;
         }
     }
@@ -2855,12 +2872,14 @@ mod tests {
             let mut pending = Vec::new();
             let mut parsed = Vec::new();
             let mut cursor = 0;
+            let mut scan_from = 0;
             for chunk in [&wire.as_bytes()[..split], &wire.as_bytes()[split..]] {
                 pending.extend_from_slice(chunk);
-                while let Some(line) = take_sse_line(&pending, &mut cursor) {
+                while let Some(line) = take_sse_line(&pending, &mut cursor, &mut scan_from) {
                     parsed.push(parse_sse_value(line).unwrap());
                 }
                 pending.drain(..cursor);
+                scan_from = scan_from.saturating_sub(cursor);
                 cursor = 0;
             }
             assert!(pending.is_empty());
