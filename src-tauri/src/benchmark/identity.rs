@@ -82,17 +82,9 @@ fn unidentified(path: &Path) -> ModelIdentity {
     // A digest of only the first GGUF shard is not the model's digest. Keep
     // multipart identity explicitly unknown until a shard-manifest is supported.
     let multipart = path
-        .file_stem()
+        .file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| {
-            name.rsplit_once("-of-").is_some_and(|(prefix, total)| {
-                total.len() == 5
-                    && total.parse::<u32>().is_ok_and(|total| total > 1)
-                    && prefix
-                        .rsplit_once('-')
-                        .is_some_and(|(_, index)| index.len() == 5 && index.parse::<u32>().is_ok())
-            })
-        });
+        .is_some_and(|name| crate::model_names::parse_shard(name).is_some());
     ModelIdentity {
         status: if multipart {
             "multipart"
@@ -473,9 +465,14 @@ mod tests {
 
     #[test]
     fn first_shard_is_never_claimed_as_complete_model_identity() {
-        let identity = unidentified(Path::new("synthetic-00001-of-00002.gguf"));
-        assert_eq!(identity.status, "multipart");
-        assert!(identity.sha256.is_none());
-        assert!(identity.size_bytes.is_none());
+        for name in [
+            "synthetic-00001-of-00002.gguf",
+            "synthetic-0001-of-0004.gguf",
+        ] {
+            let identity = unidentified(Path::new(name));
+            assert_eq!(identity.status, "multipart", "{name}");
+            assert!(identity.sha256.is_none());
+            assert!(identity.size_bytes.is_none());
+        }
     }
 }

@@ -982,12 +982,15 @@ pub fn saved_option_issues(
 }
 
 /// Name the engine serves the model under. vLLM rejects names containing `/`
-/// for some clients, so the name is derived from the directory name.
+/// for some clients, so the name is the model's display name (no directory,
+/// revision hash or split-part suffix) reduced to safe characters.
 pub fn served_model_name(model: &str) -> String {
-    let base = Path::new(model.trim_end_matches(['/', '\\']))
-        .file_name()
-        .map(|value| value.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "model".into());
+    let base = crate::model_names::resolve_display_name(model);
+    let base = if base.is_empty() {
+        "model".to_owned()
+    } else {
+        base
+    };
     let mut name = base
         .chars()
         .map(|value| {
@@ -1091,11 +1094,13 @@ pub fn engine_command(
                 .join("; ")
         ));
     }
-    let model = cfg.active_model.trim();
-    if model.is_empty() {
+    let trimmed_model = cfg.active_model.trim();
+    if trimmed_model.is_empty() {
         return Err("select a model before starting the server".into());
     }
-    argument_path("model", model)?;
+    argument_path("model", trimmed_model)?;
+    let clean_model = crate::verbatim_path::strip_windows_verbatim_prefix_str(trimmed_model);
+    let model = clean_model.as_ref();
     let metal = provider == ProviderId::Vllm && compat::is_metal(runtime.probe.as_ref());
     if metal {
         validate_metal_model_options(Path::new(model), runtime, options)?;
@@ -1149,11 +1154,13 @@ pub fn engine_command(
                     args.push("--enable-lora".into());
                 }
                 args.push("--lora-modules".into());
-                args.extend(
-                    adapters
-                        .iter()
-                        .map(|adapter| format!("{}={}", adapter.name, adapter.path)),
-                );
+                args.extend(adapters.iter().map(|adapter| {
+                    format!(
+                        "{}={}",
+                        adapter.name,
+                        crate::verbatim_path::strip_windows_verbatim_prefix_str(&adapter.path)
+                    )
+                }));
             }
             let mut launch_options = unordered(provider, options, &recorded);
             enable_supported_vllm_telemetry(runtime, options, &mut launch_options);
@@ -1205,7 +1212,13 @@ pub fn engine_command(
                 launch_options.remove("runner");
                 args.extend(["--runner".into(), "pooling".into()]);
             }
-            args.extend(options::launch_args(provider, &launch_options));
+            args.extend(
+                options::launch_args(provider, &launch_options)
+                    .into_iter()
+                    .map(|arg| {
+                        crate::verbatim_path::strip_windows_verbatim_prefix_arg(&arg).into_owned()
+                    }),
+            );
             if !api_key.is_empty() {
                 env.push(("VLLM_API_KEY".into(), api_key.into()));
             }
@@ -1241,7 +1254,10 @@ pub fn engine_command(
                     return Err("mlx-vlm embedding sessions do not accept LoRA adapters".into());
                 }
                 args.push("--adapter-path".into());
-                args.push(adapter.path.clone());
+                args.push(
+                    crate::verbatim_path::strip_windows_verbatim_prefix_str(&adapter.path)
+                        .into_owned(),
+                );
             }
             if let Some(draft) = options.get(DRAFT_MODEL_KEY).and_then(Value::as_str) {
                 if primary_embedding {
@@ -1255,17 +1271,22 @@ pub fn engine_command(
                     return Err(problem);
                 }
                 args.push("--draft-model".into());
-                args.push(draft.to_owned());
+                args.push(
+                    crate::verbatim_path::strip_windows_verbatim_prefix_str(draft).into_owned(),
+                );
             }
             if primary_embedding && options.contains_key("embedding_model") {
                 return Err(
                     "select the embedding model as the primary model or companion, not both".into(),
                 );
             }
-            args.extend(options::launch_args(
-                provider,
-                &unordered(provider, options, &recorded),
-            ));
+            args.extend(
+                options::launch_args(provider, &unordered(provider, options, &recorded))
+                    .into_iter()
+                    .map(|arg| {
+                        crate::verbatim_path::strip_windows_verbatim_prefix_arg(&arg).into_owned()
+                    }),
+            );
             // mlx-vlm 0.7.6 constructs RuntimeConfig while importing the
             // server package, before its CLI sets MAX_KV_SIZE. Seed the same
             // validated budget before import so /v1/settings and generation
@@ -1321,7 +1342,9 @@ pub fn engine_command(
         }
     }
     Ok(EngineCommand {
-        program: PathBuf::from(&runtime.python),
+        program: crate::verbatim_path::strip_windows_verbatim_prefix(PathBuf::from(
+            &runtime.python,
+        )),
         working_directory: super::execution_context::directory(cfg, None)?,
         args,
         env,

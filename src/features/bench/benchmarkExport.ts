@@ -17,7 +17,7 @@ function exportFileName(records: PerformanceBenchmarkRecord[], scope: ExportScop
   const timestamp = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}_${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}`;
   if (scope === 'all') return `aiolm-benchmarks-all_${timestamp}.${format}`;
 
-  const name = modelDisplayName(record ? recordedBenchmarkModelLabel(record) : '').normalize('NFC').replace(/\.gguf$/i, '')
+  const name = modelDisplayName(record ? recordedBenchmarkModelLabel(record) : '').normalize('NFC').replace(/\.(gguf|safetensors)$/i, '')
     .replace(/[<>:"/\\|?*\p{Cc}\p{Cf}]/gu, '-')
     .replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^[. -]+|[. -]+$/g, '');
   // Leave room for the prefix and timestamp even with four-byte Unicode characters.

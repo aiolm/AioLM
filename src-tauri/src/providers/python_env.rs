@@ -851,7 +851,9 @@ fn discover_base_interpreters_with_cancel(
             break;
         }
         if let Ok(path) = which::which(name) {
-            let path = path.canonicalize().unwrap_or(path);
+            let path = crate::verbatim_path::strip_windows_verbatim_prefix(
+                path.canonicalize().unwrap_or(path),
+            );
             if found.contains(&path) {
                 continue;
             }

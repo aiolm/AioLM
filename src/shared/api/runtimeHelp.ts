@@ -248,7 +248,7 @@ export const runtimeHelpResolvePlan = (
   invoke<ResolvedOptions>('runtime_help_resolve_plan', { schema, scope, plan });
 
 /** Split a pasted command into an ordered plan preserving input order. */
-export type CommandSyntax = 'posix' | 'windows';
+export type CommandSyntax = 'posix' | 'windows' | 'powershell';
 
 export const runtimeHelpImport = (
   schema: OptionSchema,

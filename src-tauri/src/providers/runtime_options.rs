@@ -1075,8 +1075,18 @@ impl OptionDefinition {
             }
             let values = row
                 .iter()
-                .map(|v| self.scalar(v))
-                .collect::<Result<Vec<_>, _>>()?;
+                .map(|v| {
+                    let text = self.scalar(v)?;
+                    if self.target == Target::Launch && self.sensitive.supported() != Some(&true) {
+                        Ok(
+                            crate::verbatim_path::strip_windows_verbatim_prefix_str(&text)
+                                .into_owned(),
+                        )
+                    } else {
+                        Ok(text)
+                    }
+                })
+                .collect::<Result<Vec<_>, String>>()?;
             if self.target == Target::Request {
                 continue;
             }
@@ -2329,5 +2339,47 @@ mod tests {
         assert!(resolved.request.is_empty());
         assert_eq!(serde_json::to_value(&values).unwrap(), original_values);
         assert_eq!(described, original_schema);
+    }
+
+    #[test]
+    fn launch_option_resolution_strips_windows_verbatim_prefixes_and_preserves_sensitive_values() {
+        let mut mmproj = option("mmproj", ValueKind::Text, 1, Some(1));
+        mmproj.local_path = known(true);
+        let mut draft = option("draft-model", ValueKind::Text, 1, Some(1));
+        draft.local_path = known(true);
+        draft.spellings[0].style = ValueStyle::Equals;
+        let mut mtp = option("mtp-model", ValueKind::Text, 1, Some(1));
+        mtp.local_path = known(true);
+        let mut secret = option("secret", ValueKind::Text, 1, Some(1));
+        secret.sensitive = known(true);
+        let described = schema(vec![mmproj, draft, mtp, secret]);
+        let values = selected(&[
+            (
+                "mmproj",
+                vec![vec![json!(r"\\?\C:\한글 모델\mmproj dir\mmproj.gguf")]],
+            ),
+            (
+                "draft-model",
+                vec![vec![json!(r"\\?\UNC\server\share\한글 폴더\draft.gguf")]],
+            ),
+            (
+                "mtp-model",
+                vec![vec![json!(r"\\?\unc\nas\models\mtp.gguf")]],
+            ),
+            ("secret", vec![vec![json!(r"\\?\C:\kept-exact")]]),
+        ]);
+        let resolved = described.resolve(&[], &values).unwrap();
+        assert_eq!(
+            resolved.argv,
+            vec![
+                "--mmproj",
+                r"C:\한글 모델\mmproj dir\mmproj.gguf",
+                r"--draft-model=\\server\share\한글 폴더\draft.gguf",
+                "--mtp-model",
+                r"\\nas\models\mtp.gguf",
+                "--secret",
+                r"\\?\C:\kept-exact",
+            ]
+        );
     }
 }

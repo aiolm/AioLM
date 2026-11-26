@@ -20,31 +20,22 @@ import { LocalTaskCancelButton } from '../../shared/ui/TaskCancellation';
 import { formatBytes, formatCpuCores } from '../../shared/lib/units';
 import BenchmarkExplorerActions from './BenchmarkExplorerActions';
 import PanelFeedback, { ActivePanelContext } from '../../shared/ui/PanelFeedback';
+import CommandLineViewer from '../../shared/ui/CommandLineViewer';
+import { commandToolsCopy } from '../model-settings/commandToolsCopy';
 import type { usePerformanceBench } from './usePerformanceBench';
 import { CONCURRENCIES, CORPORA, OUTPUT_TOKENS, PROMPT_BYTES, TASK_ID, formatInputSize } from './performanceBenchConfig';
 
+/**
+ * AioLM's automatic-connection helper (`<app> --internal-runtime-auto serve …`)
+ * starts the inference engine on AioLM's behalf. A helper run whose record has
+ * neither `engine_args` nor `engine_args_error` predates engine-command
+ * recording (a capture failure records its reason instead), and the engine command
+ * cannot be rebuilt from the helper arguments alone: they omit the engine
+ * program and keep the model and port bindings unresolved.
+ */
+const runsThroughAutoHelper = (args: readonly string[]) => args[1] === '--internal-runtime-auto' && args[2] === 'serve';
+
 const STATUS_TONES = { complete: 'success', partial: 'warning', cancelled: 'neutral', failed: 'danger' } as const;
-
-const startsOption = (token: string | undefined) => token !== undefined && /^--?[a-zA-Z]/.test(token);
-
-/** One line per launch argument: an option keeps the value it was given. */
-function argumentLines(args: readonly string[]): string[] {
-  const lines: string[] = [];
-  for (let index = 0; index < args.length; index += 1) {
-    const token = args[index];
-    if (token === undefined) continue;
-    const option = JSON.stringify(normalizeDisplayText(token));
-    const next = args[index + 1];
-    // A following token that does not begin another option is this option's value.
-    if (startsOption(token) && next !== undefined && !startsOption(next)) {
-      lines.push(`${option} ${JSON.stringify(normalizeDisplayText(next))}`);
-      index += 1;
-    } else {
-      lines.push(option);
-    }
-  }
-  return lines;
-}
 
 
 export function PerformanceBenchView({ controller }: { controller: ReturnType<typeof usePerformanceBench> }) {
@@ -218,7 +209,9 @@ export function PerformanceBenchView({ controller }: { controller: ReturnType<ty
             </dl>{servingProvenance && <><p>{copy.hostScope}</p><p>{copy.sourceHint}</p><h3 className="performance-details-heading">{copy.recordedSettings}</h3><RecordedSettings settings={servingProvenance.execution.settings} copy={copy} /></>}
               {servingRecord && <dl className="performance-run-config">{servingRecord.result.rows.map(row => <div key={row.id}><dt>{formatInputSize(row.input_bytes)} / {row.concurrency}× / {row.max_output_tokens} · {row.repetition}</dt><dd>{copy.usageStatus}: {({ complete: copy.usageComplete, partial: copy.usagePartial, missing: copy.usageMissing, invalid: copy.usageInvalid })[row.usage_status]} · {copy.finishReasons}: {row.finish_reasons.join(' / ')}</dd></div>)}</dl>}
             </div></details>}
-            {visibleResult && visibleResult.args.length > 0 && <details className="performance-details"><summary>{copy.effectiveArgs}</summary><div className="performance-details-body"><code>{argumentLines(visibleResult.args).join("\n")}</code></div></details>}
+            {visibleResult && visibleResult.args.length > 0 && <details className="performance-details"><summary>{copy.effectiveArgs}</summary><div className="performance-details-body"><CommandLineViewer argv={visibleResult.args} engineArgv={visibleResult.engine_args} context="recorded" framed={false} labels={commandToolsCopy[locale]} />{!visibleResult.engine_args?.length && (visibleResult.engine_args_error
+              ? <p className="app-section-hint">{copy.engineCommandCaptureFailed} {normalizeDisplayText(visibleResult.engine_args_error)}</p>
+              : runsThroughAutoHelper(visibleResult.args) && <p className="app-section-hint">{copy.engineCommandNotRecorded}</p>)}</div></details>}
             <details className="performance-details"><summary>{copy.metrics}</summary><div className="performance-details-body"><dl className="performance-metric-guide">
               <div><dt>{copy.firstOutput}</dt><dd>{copy.firstOutputHint}</dd></div>
               <div><dt>{copy.prefillRate}</dt><dd>{copy.prefillRateHint}</dd></div>

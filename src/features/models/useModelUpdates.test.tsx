@@ -89,7 +89,7 @@ describe('model update lifecycle', () => {
       expect(result.current.busy).toBe(true);
       const task = getTaskSnapshot()[0]!;
       expect(task.id.startsWith(`${MODEL_DOWNLOAD_TASK_ID}:`)).toBe(true);
-      expect(task).toMatchObject({ received: 0, total: 2048, interruptible: true });
+      expect(task).toMatchObject({ label: 'model.gguf', received: 0, total: 2048, interruptible: true });
       const updateArgs = vi.mocked(invoke).mock.calls.find(([cmd]) => cmd === 'hf_update_model')?.[1];
       expect(updateArgs).toMatchObject({
         path: modelPath,
@@ -169,5 +169,21 @@ describe('model update lifecycle', () => {
     expect(result.current.updateError).toBeUndefined();
     expect(result.current.busy).toBe(false);
     expect(getTaskSnapshot()).toEqual([]);
+  });
+
+  it('uses the display name without local directories or part suffixes when updating split models', async () => {
+    const splitPath = '/synthetic/models/Qwen-0001-of-0004.gguf';
+    const splitCatalog: ModelUpdateCatalog = { directory: '/synthetic/models', paths: [splitPath] };
+    const transfer = deferred<ModelUpdateResult>();
+    vi.mocked(invoke)
+      .mockResolvedValueOnce([{ ...available, path: splitPath }])
+      .mockReturnValueOnce(transfer.promise)
+      .mockResolvedValue([{ ...available, path: splitPath }]);
+    const { result } = renderHook(() => useModelUpdates({ ...initialProps, catalog: splitCatalog }));
+    await waitFor(() => expect(result.current.checking).toBe(false));
+    let updating!: Promise<void>;
+    act(() => { updating = result.current.update(splitPath); });
+    expect(getTaskSnapshot()[0]).toMatchObject({ label: 'Qwen.gguf', filePath: splitPath });
+    await act(async () => { transfer.resolve({ ...committed, path: splitPath }); await updating; });
   });
 });

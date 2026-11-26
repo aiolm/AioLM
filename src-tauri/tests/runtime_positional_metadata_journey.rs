@@ -371,6 +371,9 @@ async fn engine_journey(home: &Path) {
 
     // Display copies hide exactly that token; everything else stays.
     let preview = providers::command_preview(&loaded).unwrap();
+    // Launch accepts this configuration, so the preview reports no block.
+    assert_eq!(preview.launch_blocked, None);
+    let preview = preview.argv;
     assert!(!preview.iter().any(|a| a.contains(TOKEN)), "{preview:?}");
     assert_eq!(preview.iter().filter(|a| *a == REDACTED).count(), 1);
     let restored: Vec<String> = preview
@@ -594,7 +597,7 @@ async fn python_journey(home: &Path) {
     let launch = providers::registry::command(&cfg, cfg.port, "synthetic-key").unwrap();
     assert_eq!(launch.args.iter().filter(|a| *a == TOKEN).count(), 1);
 
-    let preview = providers::command_preview(&cfg).unwrap();
+    let preview = providers::command_preview(&cfg).unwrap().argv;
     assert!(!preview.iter().any(|a| a.contains(TOKEN)), "{preview:?}");
     assert_eq!(preview.iter().filter(|a| *a == REDACTED).count(), 1);
     let script_text = script.to_string_lossy().into_owned();

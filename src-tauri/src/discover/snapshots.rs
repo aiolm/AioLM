@@ -334,37 +334,19 @@ fn validate_loading_files(files: &[SnapshotFile]) -> Result<(), AppError> {
     }
     let mut checked_groups = std::collections::HashSet::new();
     for file in files {
-        if let Some(stem) = file.path.strip_suffix(".safetensors") {
-            if let Some((prefix, count)) = stem.rsplit_once("-of-") {
-                if let Some((base, index)) = prefix.rsplit_once('-') {
-                    if index.len() == 5
-                        && count.len() == 5
-                        && index
-                            .bytes()
-                            .chain(count.bytes())
-                            .all(|byte| byte.is_ascii_digit())
-                    {
-                        let index: usize = index
-                            .parse()
-                            .map_err(|_| AppError::validation("invalid weight shard"))?;
-                        let count: usize = count
-                            .parse()
-                            .map_err(|_| AppError::validation("invalid weight shard count"))?;
-                        if index == 0 || index > count || count > MAX_TREE_ENTRIES {
-                            return Err(AppError::validation("invalid weight shard count"));
-                        }
-                        if !checked_groups.insert(format!("{base}-of-{count:05}")) {
-                            continue;
-                        }
-                        for part in 1..=count {
-                            let path = format!("{base}-{part:05}-of-{count:05}.safetensors");
-                            if !has(&path) {
-                                return Err(AppError::not_found(format!(
-                                    "snapshot is missing weight shard: {path}"
-                                )));
-                            }
-                        }
-                    }
+        if let Some(parts) = crate::model_names::parse_safetensors_shard_raw(&file.path) {
+            if parts.index == 0 || parts.index > parts.total || parts.total > MAX_TREE_ENTRIES {
+                return Err(AppError::validation("invalid weight shard count"));
+            }
+            if !checked_groups.insert((parts.base, parts.total, parts.width)) {
+                continue;
+            }
+            for part in 1..=parts.total {
+                let path = parts.format_part(part);
+                if !has(&path) {
+                    return Err(AppError::not_found(format!(
+                        "snapshot is missing weight shard: {path}"
+                    )));
                 }
             }
         }
@@ -717,13 +699,16 @@ pub async fn download_snapshot(
         complete: false,
     };
     // Remembered until it completes, so a pause or restart can continue it.
+    let label = file_path
+        .map(crate::model_names::strip_shard_suffix)
+        .unwrap_or_else(|| repo.to_owned());
     let pending = pending::PendingDownload::new(
         (repo, &revision),
         file_path,
         true,
         models_dir,
         false,
-        file_path.unwrap_or(repo),
+        &label,
         manifest
             .files
             .iter()

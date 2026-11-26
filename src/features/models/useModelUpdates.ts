@@ -8,7 +8,9 @@ import {
   modelDownloadTaskId,
   useModelDownloads,
 } from '../../shared/state/modelDownloadTask';
-import { finishTask, getTaskSnapshot, registerTask, subscribeTasks } from '../../shared/state/taskRegistry';
+import { finishTask, getTaskSnapshot, registerTask, subscribeTasks, updateTask } from '../../shared/state/taskRegistry';
+import { modelDisplayName } from '../../shared/lib/displayPaths';
+import { resolveModelDisplayName } from '../../shared/lib/modelNames';
 import { invalidateModelCatalog } from '../model-settings/useModelCatalog';
 
 /** A successful scan, not a filtered or previously displayed model list. */
@@ -102,8 +104,12 @@ export function useModelUpdates({ active, directory, catalog, blocked }: {
       if (next && next.cancel !== cancel) superseded = true;
     });
     const ownsTask = () => !superseded && currentTask(taskId)?.cancel === cancel;
-    registerTask({ id: taskId, kind: 'model-download', downloadKind: 'update', label: path,
+    registerTask({ id: taskId, kind: 'model-download', downloadKind: 'update', label: modelDisplayName(path),
       filePath: path, modelsDir: current.directory, phase: 'starting', received: 0, total: status.download_bytes, interruptible: true, cancel });
+    // A snapshot may carry a declared or selected title; the path label is the fallback.
+    void resolveModelDisplayName(path).then(resolved => {
+      if (resolved && ownsTask()) updateTask(taskId, { label: resolved });
+    });
     try {
       await hfUpdateModel(path, current.directory, status.latest_revision, downloadId);
       // A committed update must refresh every catalog even if its panel left,

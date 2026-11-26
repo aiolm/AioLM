@@ -311,7 +311,7 @@ pub(crate) async fn model_artifact(path: String) -> Result<ModelArtifact, AppErr
     tokio::task::spawn_blocking(move || {
         if let Some(artifact) = providers::registry::registered_models()
             .into_iter()
-            .find(|model| model.path == path)
+            .find(|model| crate::verbatim_path::same_verbatim_stripped_path(&model.path, &path))
         {
             return Ok(artifact);
         }
@@ -354,17 +354,9 @@ pub fn inspect_catalog(
 fn catalog_path_key(raw: &str) -> String {
     #[cfg(windows)]
     {
-        let stripped = if raw
-            .get(..8)
-            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(r"\\?\UNC\"))
-        {
-            format!(r"\\{}", &raw[8..])
-        } else if let Some(rest) = raw.strip_prefix(r"\\?\") {
-            rest.to_owned()
-        } else {
-            raw.to_owned()
-        };
-        stripped.replace('/', "\\").to_ascii_lowercase()
+        crate::verbatim_path::strip_windows_verbatim_prefix_str(raw)
+            .replace('/', "\\")
+            .to_ascii_lowercase()
     }
     #[cfg(not(windows))]
     {
@@ -900,7 +892,9 @@ pub(crate) fn provider_import_command(
 }
 
 #[tauri::command]
-pub(crate) fn provider_command_preview(cfg: config::AppConfig) -> Result<Vec<String>, AppError> {
+pub(crate) fn provider_command_preview(
+    cfg: config::AppConfig,
+) -> Result<providers::CommandPreview, AppError> {
     providers::command_preview(&cfg)
 }
 

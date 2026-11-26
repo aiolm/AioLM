@@ -28,6 +28,7 @@ mod launch_path;
 mod launch_validation;
 mod mcp;
 pub mod media;
+pub mod model_names;
 pub mod models;
 mod native_confirm;
 pub mod performance_bench;
@@ -46,6 +47,7 @@ mod startup;
 mod state;
 mod tray;
 pub mod tuning_defaults;
+pub(crate) mod verbatim_path;
 pub mod verify;
 pub mod window_appearance;
 

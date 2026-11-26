@@ -440,6 +440,12 @@ export interface PerformanceBenchmarkResult {
   message?: string | null;
   /** Private sanitized program/argv, never used to reconstruct public settings. */
   args: string[];
+  /** Private sanitized inference engine command when AioLM runs the engine through a helper.
+   * The helper picks the engine's port itself, so a port binding is recorded as `{port}`. */
+  engine_args?: string[];
+  /** Why a helper run's engine command could not be recorded; the measurement still ran.
+   * Records made before engine commands were recorded have neither field. */
+  engine_args_error?: string;
   provenance?: PerformanceBenchmarkProvenance;
 }
 

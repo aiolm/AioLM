@@ -7,7 +7,7 @@ import { useSessionPolling } from '../../shared/hooks/useSessionPolling';
 import { executionText } from '../../shared/i18n/executionI18n';
 import { useI18n } from "../../shared/i18n/i18n";
 import { memorySourceText, statusDisplayCopy } from '../../shared/i18n/statusDisplayCopy';
-import { modelPathIdentity, normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
+import { formatModelLabel, modelPathIdentity, normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
 import { isLifecycleCancellation, isServerBusy } from "../../shared/lib/serverLifecycle";
 import { formatMebibytes } from '../../shared/lib/units';
 import { loadedModelPath } from '../../shared/runtime/loadedModel';
@@ -309,7 +309,7 @@ export function useModelsController({ store, onSelectModel, onModels, active = t
       const next = await store.updateConfig({ active_model: model.path });
       // Backend preflight completes before replacing the running process.
       await store.start(next, switching);
-      notify(switching ? `${t("panel.restartServer")}: ${model.name}` : `${t("panel.serverStarted")}: ${model.name}`);
+      notify(switching ? `${t("panel.restartServer")}: ${formatModelLabel(model.name)}` : `${t("panel.serverStarted")}: ${formatModelLabel(model.name)}`);
     } catch (error) {
       notify(isLifecycleCancellation(error) ? t("ui.taskCancelled") : `${t("panel.startFailed")}: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -321,7 +321,7 @@ export function useModelsController({ store, onSelectModel, onModels, active = t
     if (switching && shouldConfirmDestructive()) {
       setPendingConfirm({
         title: t("panel.restartSwitchQuestion"),
-        description: t("ui.switchModelBody", { name: normalizeDisplayText(model.name) }),
+        description: t("ui.switchModelBody", { name: formatModelLabel(model.name) }),
         confirmLabel: t("panel.restartSwitch"),
         confirmIcon: "open",
         onConfirm: () => { setPendingConfirm(null); void performSelectAndStart(model); },
@@ -365,7 +365,7 @@ export function useModelsController({ store, onSelectModel, onModels, active = t
         if (store.getConfig()?.active_model === model.path) {
           await store.updateConfig(current => current.active_model === model.path ? { active_model: '' } : {});
         }
-        notify(t("ui.deletedModelNamed", { name: model.name }));
+        notify(t("ui.deletedModelNamed", { name: formatModelLabel(model.name) }));
       } catch (error) {
         notify(`${t("ui.deleteFailed")}: ${error instanceof Error ? error.message : String(error)}`);
       } finally {
@@ -376,7 +376,7 @@ export function useModelsController({ store, onSelectModel, onModels, active = t
     if (!shouldConfirmDestructive()) { void remove(); return; }
     setPendingConfirm({
       title: t("ui.deleteModelTitle"),
-      description: model.shards ? t("ui.deleteSplitModelBody", { name: normalizeDisplayText(model.name), count: model.shards.files.length }) : t("ui.deleteModelBody", { name: normalizeDisplayText(model.name) }),
+      description: model.shards ? t("ui.deleteSplitModelBody", { name: formatModelLabel(model.name), count: model.shards.files.length }) : t("ui.deleteModelBody", { name: formatModelLabel(model.name) }),
       confirmLabel: t("ui.deleteModelAction"),
       confirmIcon: "delete",
       onConfirm: () => void remove(),

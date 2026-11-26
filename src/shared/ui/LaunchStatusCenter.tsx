@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { errorMessage } from "../api/errors";
 import { useI18n } from "../i18n/i18n";
-import { normalizeDisplayText } from "../lib/displayPaths";
+import { formatModelLabel, normalizeDisplayText } from "../lib/displayPaths";
 import {
   dismissTask,
   getTaskSnapshot,
@@ -163,7 +163,7 @@ export default function LaunchStatusCenter({
         : [copy.launchLoadingSingle, copy.launchError, copy.launchReady];
   const triggerTitle =
     ordered[0] && ordered.length === 1
-      ? `${copy.launchTitle}: ${normalizeDisplayText(ordered[0].label)} — ${triggerText}`
+      ? `${copy.launchTitle}: ${formatModelLabel(ordered[0].label)} — ${triggerText}`
       : statusLabel
         ? `${copy.launchTitle}: ${statusLabel}`
         : `${copy.launchTitle}: ${triggerText}`;
@@ -233,7 +233,7 @@ export default function LaunchStatusCenter({
               ordered.map((task) => {
                 const activeTask = task.state === "running" || task.state === "cancelling";
                 const isFailure = task.state === "failed" || task.state === "crashed";
-                const label = normalizeDisplayText(task.label);
+                const label = formatModelLabel(task.label);
                 const status = normalizeDisplayText(launchStatusLabel(task, t));
                 const detail = task.detail ? normalizeDisplayText(task.detail) : "";
                 return (

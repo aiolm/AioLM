@@ -14,6 +14,10 @@ import { runtimeOptionsCopy } from '../../shared/i18n/runtimeOptionsCopy';
 import { ProfileRuntimeSchemaContext } from './useProfileRuntimeSchema';
 
 const match: { objectContaining: (value: Record<string, unknown>) => unknown } = expect;
+/** The previewed command exactly as shown and copied, line breaks included. */
+const commandMatcher = (text: string) => (_: string, element: Element | null) => element?.tagName === 'PRE' && element.textContent === text;
+const findCommand = (text: string) => screen.findByText(commandMatcher(text));
+const getCommand = (text: string) => screen.getByText(commandMatcher(text));
 
 vi.mock('../../shared/api', async importOriginal => ({
   ...await importOriginal<typeof import('../../shared/api')>(),
@@ -260,7 +264,7 @@ describe('runtime-specific option controls', () => {
     vi.mocked(api.providerOptionSchema).mockResolvedValueOnce(effectiveSchema([], options));
     vi.mocked(api.providerRuntimes).mockReturnValue(new Promise(() => undefined));
     vi.mocked(api.providerRuntimeOptions).mockResolvedValue([]);
-    const preview = vi.spyOn(api, 'providerCommandPreview').mockResolvedValue([]);
+    const preview = vi.spyOn(api, 'providerCommandPreview').mockResolvedValue({ argv: [] });
     const onChecking = vi.fn();
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     let rendered: ReturnType<typeof render> | undefined;
@@ -287,8 +291,10 @@ describe('runtime-specific option controls', () => {
       expect(container).not.toHaveTextContent('Show more options');
       expect(container.querySelector('button[aria-label^="Show more options"], button[title^="Show more options"]')).toBeNull();
       const tools = screen.getByText('Command and help tools').closest('details')!;
-      const previewButton = within(tools).getByRole('button', { name: 'Command preview', hidden: true });
-      expect(previewButton).not.toBeVisible();
+      // Pasting and previewing a command stay in view; the rest stays collapsed.
+      const previewButton = screen.getByRole('button', { name: 'Command preview' });
+      expect(previewButton.closest('details')).toBeNull();
+      expect(previewButton).toBeVisible();
       expect(within(tools).getByRole('region', { name: 'App-managed arguments', hidden: true })).not.toBeVisible();
       expect(tools).not.toHaveAttribute('open');
       expect(preview).not.toHaveBeenCalled();
@@ -297,7 +303,6 @@ describe('runtime-specific option controls', () => {
       expect(onChecking).toHaveBeenLastCalledWith(false);
       fireEvent.click(screen.getByText('Command and help tools'));
       expect(tools).toHaveAttribute('open');
-      expect(previewButton).toBeVisible();
       expect(within(tools).getByRole('region', { name: 'App-managed arguments', hidden: true })).toBeVisible();
       await act(async () => { fireEvent.click(previewButton); });
       expect(preview).toHaveBeenCalledTimes(1);
@@ -576,8 +581,11 @@ describe('registered engine options from accepted help (G04)', () => {
     render(<I18nProvider initialLocale="en"><ProviderOptions cfg={config} disabled={false} onChange={onChange} onInvalid={vi.fn()} /></I18nProvider>);
     await screen.findByLabelText(/^--template/);
     const text = `--template "${path}"`;
-    fireEvent.change(screen.getByRole('textbox', { name: 'Import command' }), { target: { value: text } });
+    // Quoting starts at this host's rules (POSIX here), so a paste is importable at once.
+    expect(screen.getByRole('combobox', { name: 'Command syntax' })).toHaveTextContent('POSIX argument quoting');
     expect(screen.getByRole('button', { name: 'Import command' })).toBeDisabled();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Import command' }), { target: { value: text } });
+    expect(screen.getByRole('button', { name: 'Import command' })).toBeEnabled();
     expect(imported).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('combobox', { name: 'Command syntax' }));
     fireEvent.click(screen.getByRole('option', { name: 'Windows argument quoting' }));
@@ -732,11 +740,12 @@ describe('registered engine options from accepted help (G04)', () => {
     const sensitive = schemaOption({ key: 'secret', flag: '--secret', target: 'launch', group: 'options', kind: { type: 'text' } });
     sensitive.sensitive = { value: true, certainty: 'verified' };
     vi.mocked(api.providerOptionSchema).mockResolvedValueOnce(effectiveSchema([], [sensitive]));
-    const preview = vi.spyOn(api, 'providerCommandPreview').mockResolvedValue(['/synthetic/engine', '--secret', 'synthetic-credential']);
+    const preview = vi.spyOn(api, 'providerCommandPreview').mockResolvedValue({ argv: ['/synthetic/engine', '--secret', 'synthetic-credential'] });
     render(<I18nProvider initialLocale="en"><ProviderOptions cfg={{ ...config, provider_options: { 'custom.synthetic': { secret: 'synthetic-credential' } } }} disabled={false} onChange={vi.fn()} onInvalid={vi.fn()} /></I18nProvider>);
     await screen.findByLabelText(/^--secret/);
     fireEvent.click(screen.getByRole('button', { name: 'Command preview' }));
-    expect(await screen.findByText(/•••/)).toBeVisible();
+    expect(await findCommand("/synthetic/engine \\\n  --secret '•••'")).toBeVisible();
+    expect(screen.getByText(/hidden secret values/)).toBeVisible();
     expect(screen.queryByText(/synthetic-credential/)).not.toBeInTheDocument();
     preview.mockRestore();
   });
@@ -784,13 +793,13 @@ describe('registered engine options from accepted help (G04)', () => {
 
   it('keeps a failed option check blocked and visible after a successful command preview', async () => {
     vi.mocked(api.providerOptionIssues).mockRejectedValue('Synthetic option check failed');
-    const preview = vi.spyOn(api, 'providerCommandPreview').mockResolvedValue(['/synthetic/engine', '--workers', '2']);
+    const preview = vi.spyOn(api, 'providerCommandPreview').mockResolvedValue({ argv: ['/synthetic/engine', '--workers', '2'] });
     const onInvalid = vi.fn();
     render(<I18nProvider initialLocale="en"><ProviderOptions cfg={{ ...config, provider_options: { 'custom.synthetic': { workers: 2 } } }} disabled={false} onChange={vi.fn()} onInvalid={onInvalid} onChecking={vi.fn()} /></I18nProvider>);
     expect(await screen.findByText('Synthetic option check failed')).toBeVisible();
     await waitFor(() => expect(onInvalid).toHaveBeenLastCalledWith('provider-options', true));
     fireEvent.click(screen.getByRole('button', { name: 'Command preview' }));
-    expect(await screen.findByText(/"--workers" "2"/)).toBeVisible();
+    expect(await findCommand('/synthetic/engine \\\n  --workers 2')).toBeVisible();
     expect(screen.getByText('Synthetic option check failed')).toBeVisible();
     expect(onInvalid).toHaveBeenLastCalledWith('provider-options', true);
     preview.mockRestore();
@@ -855,17 +864,205 @@ describe('registered engine options from accepted help (G04)', () => {
     clear.mockRestore();
   });
 
-  it('keeps the saved order record out of unknown values and reorders it from settings', async () => {
+  it('keeps the saved order record out of unknown values without per-row reorder controls', async () => {
     const items = { ...fresh, key: 'fresh_tag', spellings: [{ flag: '--fresh-tag' }], arity: { value: { min: 1, max: 1 }, certainty: 'verified' as const, source: { kind: 'help', document: 'stdout', start_line: 1, end_line: 1 } } };
     vi.mocked(api.providerOptionSchema).mockResolvedValue(effectiveSchema([], [fresh, items]));
-    const saved = { fresh_pair: { spelling: null, occurrences: [['a', 'b']] }, fresh_tag: 'x' };
-    const onChange = vi.fn();
+    const saved = { fresh_pair: { spelling: null, occurrences: [['a', 'b']] }, fresh_tag: 'x',
+      '@option_order': { version: 1, occurrences: [{ key: 'fresh_tag' }, { key: 'fresh_pair' }] } };
     const onInvalid = vi.fn();
-    render(<I18nProvider initialLocale="en"><ProviderOptions cfg={{ ...config, provider_options: { 'custom.synthetic': saved } }} disabled={false} onChange={onChange} onInvalid={onInvalid} /></I18nProvider>);
-    fireEvent.click(await screen.findByRole('button', { name: 'Move up: --fresh-tag "x"' }));
-    expect(onChange).toHaveBeenLastCalledWith({ provider_options: { 'custom.synthetic': { ...saved,
-      '@option_order': { version: 1, occurrences: [{ key: 'fresh_tag' }, { key: 'fresh_pair' }] } } } });
+    render(<I18nProvider initialLocale="en"><ProviderOptions cfg={{ ...config, provider_options: { 'custom.synthetic': saved } }} disabled={false} onChange={vi.fn()} onInvalid={onInvalid} /></I18nProvider>);
+    await screen.findByLabelText(/^--fresh-tag/);
     await waitFor(() => expect(onInvalid).toHaveBeenLastCalledWith('provider-options', false));
+    expect(screen.queryByRole('button', { name: /^Move (up|down)/ })).not.toBeInTheDocument();
+    expect(screen.queryByText('@option_order')).not.toBeInTheDocument();
+  });
+
+  it('keeps the command paste box and preview outside the collapsed external-engine tools', async () => {
+    render(<I18nProvider initialLocale="en"><ProviderOptions collapseTools hideDefaultsReset cfg={config} disabled={false} onChange={vi.fn()} onInvalid={vi.fn()} /></I18nProvider>);
+    const input = await screen.findByRole('textbox', { name: 'Import command' });
+    expect(input.closest('details')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Command preview' }).closest('details')).toBeNull();
+  });
+
+  it('shows a native preview rejection as its message and copies the shown command', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    const preview = vi.spyOn(api, 'providerCommandPreview')
+      .mockRejectedValueOnce({ kind: 'validation', message: 'Synthetic preview refusal' })
+      .mockResolvedValueOnce({ argv: ['/synthetic/engine dir/serve', '--label', 'two words'] });
+    render(<I18nProvider initialLocale="en"><ProviderOptions cfg={{ ...config, provider_options: { 'custom.synthetic': { workers: 2 } } }} disabled={false} onChange={vi.fn()} onInvalid={vi.fn()} /></I18nProvider>);
+    await screen.findByLabelText(/^--workers/);
+    fireEvent.click(screen.getByRole('button', { name: 'Command preview' }));
+    expect(await screen.findByText('Synthetic preview refusal')).toBeVisible();
+    expect(screen.queryByText('[object Object]')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Command preview' }));
+    const command = "'/synthetic/engine dir/serve' \\\n  --label 'two words'";
+    expect(await findCommand(command)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy command' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(command));
+    expect(await screen.findByText('Copied')).toBeVisible();
+    expect(screen.queryByText(/hidden secret values/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Launch is still blocked/)).not.toBeInTheDocument();
+    preview.mockRestore();
+  });
+
+  it('defaults paste and copy to PowerShell on Windows and lets the copy format change on its own', async () => {
+    const agent = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Windows NT 10.0; Win64; x64)');
+    const preview = vi.spyOn(api, 'providerCommandPreview').mockResolvedValue({ argv: ['C:\\Engines\\synthetic engine\\serve.exe', '--label', 'a b', '--path', '%TEMP%'] });
+    const imported = vi.spyOn(api, 'runtimeHelpImport').mockResolvedValue({ plan: [], managed: [], unrecognized: [] });
+    try {
+      render(<I18nProvider initialLocale="en"><ProviderOptions cfg={{ ...config, provider_options: { 'custom.synthetic': { workers: 2 } } }} disabled={false} onChange={vi.fn()} onInvalid={vi.fn()} /></I18nProvider>);
+      await screen.findByLabelText(/^--workers/);
+      expect(screen.getByRole('combobox', { name: 'Command syntax' })).toHaveTextContent('PowerShell quoting');
+      fireEvent.click(screen.getByRole('button', { name: 'Command preview' }));
+      expect(await findCommand("& 'C:\\Engines\\synthetic engine\\serve.exe' `\n  --label 'a b' `\n  --path '%TEMP%'")).toBeVisible();
+      expect(screen.getByRole('combobox', { name: 'Shown and copied as' })).toHaveTextContent('PowerShell quoting');
+      expect(screen.queryByText(/can be replaced by the environment variable/)).not.toBeInTheDocument();
+      fireEvent.change(screen.getByRole('textbox', { name: 'Import command' }), { target: { value: "& 'C:\\x y\\serve.exe' --workers 3" } });
+      fireEvent.click(screen.getByRole('button', { name: 'Import command' }));
+      await waitFor(() => expect(imported).toHaveBeenCalledWith(expect.any(Object), [], "& 'C:\\x y\\serve.exe' --workers 3", 'powershell', undefined));
+      // cmd is available for copying, with a warning where cmd would expand;
+      // the paste syntax stays as it was.
+      fireEvent.click(screen.getByRole('combobox', { name: 'Shown and copied as' }));
+      fireEvent.click(screen.getByRole('option', { name: 'Windows argument quoting' }));
+      expect(screen.getByText('"C:\\Engines\\synthetic engine\\serve.exe" --label "a b" --path %TEMP%')).toBeVisible();
+      expect(screen.getByText(/can be replaced by the environment variable/)).toBeVisible();
+      expect(screen.getByRole('combobox', { name: 'Command syntax' })).toHaveTextContent('PowerShell quoting');
+    } finally {
+      agent.mockRestore(); preview.mockRestore(); imported.mockRestore();
+    }
+  });
+
+  it("shows the engine's own command by default and AioLM's helper command on request", async () => {
+    const agent = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Windows NT 10.0; Win64; x64)');
+    const preview = vi.spyOn(api, 'providerCommandPreview').mockResolvedValue({
+      argv: ['C:\\Synthetic\\aiolm-helper.exe', 'serve', '--', 'aiolm-auto-argv-v1', '{"version":1}'],
+      engine_argv: ['C:\\Synthetic\\synthetic-engine.exe', 'serve', 'llm', '--model', 'C:\\models\\synthetic model.gguf', '--top-k', '20', '--speculative', 'mtp'],
+    });
+    try {
+      render(<I18nProvider initialLocale="en"><ProviderOptions cfg={{ ...config, provider_options: { 'custom.synthetic': { workers: 2 } } }} disabled={false} onChange={vi.fn()} onInvalid={vi.fn()} /></I18nProvider>);
+      await screen.findByLabelText(/^--workers/);
+      fireEvent.click(screen.getByRole('button', { name: 'Command preview' }));
+      const engine = "C:\\Synthetic\\synthetic-engine.exe serve llm `\n  --model 'C:\\models\\synthetic model.gguf' `\n  --top-k '20' `\n  --speculative mtp";
+      expect(await findCommand(engine)).toBeVisible();
+      expect(screen.getByRole('combobox', { name: 'Command' })).toHaveTextContent('Run the inference engine directly');
+      expect(screen.queryByText(/aiolm-auto-argv-v1/)).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('checkbox', { name: 'One option per line' }));
+      expect(getCommand("C:\\Synthetic\\synthetic-engine.exe serve llm --model 'C:\\models\\synthetic model.gguf' --top-k '20' --speculative mtp")).toBeVisible();
+      fireEvent.click(screen.getByRole('combobox', { name: 'Command' }));
+      fireEvent.click(screen.getByRole('option', { name: 'Command AioLM runs' }));
+      // The helper's JSON argument holds quotes, so 5.1-safe Start-Process is used.
+      expect(getCommand("Start-Process -FilePath 'C:\\Synthetic\\aiolm-helper.exe' -ArgumentList 'serve -- aiolm-auto-argv-v1 \"{\\\"version\\\":1}\"' -NoNewWindow -Wait")).toBeVisible();
+    } finally {
+      agent.mockRestore(); preview.mockRestore();
+    }
+  });
+
+  it('offers no command choice when AioLM runs the engine itself', async () => {
+    const preview = vi.spyOn(api, 'providerCommandPreview').mockResolvedValue({ argv: ['/synthetic/engine', '--workers', '2'] });
+    render(<I18nProvider initialLocale="en"><ProviderOptions cfg={{ ...config, provider_options: { 'custom.synthetic': { workers: 2 } } }} disabled={false} onChange={vi.fn()} onInvalid={vi.fn()} /></I18nProvider>);
+    await screen.findByLabelText(/^--workers/);
+    fireEvent.click(screen.getByRole('button', { name: 'Command preview' }));
+    expect(await findCommand('/synthetic/engine \\\n  --workers 2')).toBeVisible();
+    expect(screen.queryByRole('combobox', { name: 'Command' })).not.toBeInTheDocument();
+    preview.mockRestore();
+  });
+
+  it('copies values Windows PowerShell 5.1 would drop or break through Start-Process', async () => {
+    const agent = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Windows NT 10.0; Win64; x64)');
+    const preview = vi.spyOn(api, 'providerCommandPreview').mockResolvedValue({ argv: ['C:\\Engines\\serve.exe', '--empty', '', '--say', 'say "hi"'] });
+    try {
+      render(<I18nProvider initialLocale="en"><ProviderOptions cfg={{ ...config, provider_options: { 'custom.synthetic': { workers: 2 } } }} disabled={false} onChange={vi.fn()} onInvalid={vi.fn()} /></I18nProvider>);
+      await screen.findByLabelText(/^--workers/);
+      fireEvent.click(screen.getByRole('button', { name: 'Command preview' }));
+      expect(await screen.findByText("Start-Process -FilePath 'C:\\Engines\\serve.exe' -ArgumentList '--empty \"\" --say \"say \\\"hi\\\"\"' -NoNewWindow -Wait")).toBeVisible();
+      expect(screen.queryByText(/can be replaced by the environment variable/)).not.toBeInTheDocument();
+    } finally {
+      agent.mockRestore(); preview.mockRestore();
+    }
+  });
+
+  it('sets the paste syntax from line continuations unless the user picked one', async () => {
+    const agent = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Windows NT 10.0; Win64; x64)');
+    const imported = vi.spyOn(api, 'runtimeHelpImport').mockResolvedValue({ plan: [], managed: [], unrecognized: [] });
+    try {
+      render(<I18nProvider initialLocale="en"><ProviderOptions cfg={{ ...config, provider_options: { 'custom.synthetic': { workers: 2 } } }} disabled={false} onChange={vi.fn()} onInvalid={vi.fn()} /></I18nProvider>);
+      await screen.findByLabelText(/^--workers/);
+      const box = screen.getByRole('textbox', { name: 'Import command' });
+      const bash = 'python -m engine \\\n  --workers 3';
+      fireEvent.change(box, { target: { value: bash } });
+      expect(screen.getByRole('combobox', { name: 'Command syntax' })).toHaveTextContent('POSIX argument quoting');
+      expect(screen.getByText(/Syntax set from the pasted command: POSIX argument quoting/)).toBeVisible();
+      fireEvent.click(screen.getByRole('button', { name: 'Import command' }));
+      await waitFor(() => expect(imported).toHaveBeenCalledWith(expect.any(Object), [], bash, 'posix', undefined));
+      // A syntax the user picks is kept even when the text suggests another.
+      fireEvent.click(screen.getByRole('combobox', { name: 'Command syntax' }));
+      fireEvent.click(screen.getByRole('option', { name: 'Windows argument quoting' }));
+      fireEvent.change(box, { target: { value: 'serve.exe `\n --workers 4' } });
+      expect(screen.getByRole('combobox', { name: 'Command syntax' })).toHaveTextContent('Windows argument quoting');
+      expect(screen.queryByText(/Syntax set from the pasted command/)).not.toBeInTheDocument();
+      // Clearing the paste box resets manual syntax lock and clears any auto-detected notice.
+      fireEvent.change(box, { target: { value: '   ' } });
+      fireEvent.change(box, { target: { value: bash } });
+      expect(screen.getByText(/Syntax set from the pasted command: POSIX argument quoting/)).toBeVisible();
+      fireEvent.change(box, { target: { value: '   ' } });
+      expect(screen.queryByText(/Syntax set from the pasted command/)).not.toBeInTheDocument();
+    } finally {
+      agent.mockRestore(); imported.mockRestore();
+    }
+  });
+
+  it('styles the multiline checkbox inline while keeping its accessible name and toggle behavior', async () => {
+    const preview = vi.spyOn(api, 'providerCommandPreview').mockResolvedValue({
+      argv: ['/synthetic/engine', '--workers', '2', '--port', '8080'],
+    });
+    try {
+      render(<I18nProvider initialLocale="en"><ProviderOptions cfg={{ ...config, provider_options: { 'custom.synthetic': { workers: 2 } } }} disabled={false} onChange={vi.fn()} onInvalid={vi.fn()} /></I18nProvider>);
+      await screen.findByLabelText(/^--workers/);
+      fireEvent.click(screen.getByRole('button', { name: 'Command preview' }));
+      expect(await findCommand('/synthetic/engine \\\n  --workers 2 \\\n  --port 8080')).toBeVisible();
+      const checkbox = screen.getByRole('checkbox', { name: 'One option per line' });
+      expect(checkbox).toHaveClass('model-settings-checkbox');
+      expect(checkbox.closest('label')).toHaveClass('model-settings-command-check');
+      fireEvent.click(checkbox);
+      expect(getCommand('/synthetic/engine --workers 2 --port 8080')).toBeVisible();
+      expect(screen.getByRole('button', { name: 'Copy command' })).toHaveAttribute('data-icon', 'copy');
+    } finally {
+      preview.mockRestore();
+    }
+  });
+
+  it('keeps saved secrets when a masked preview is pasted back', async () => {
+    const sensitive = schemaOption({ key: 'secret', flag: '--secret', target: 'launch', group: 'options', kind: { type: 'text' } });
+    sensitive.sensitive = { value: true, certainty: 'verified' };
+    const label = schemaOption({ key: 'label', flag: '--label', target: 'launch', group: 'options', kind: { type: 'text' } });
+    vi.mocked(api.providerOptionSchema).mockResolvedValueOnce(effectiveSchema([], [sensitive, label]));
+    const imported = vi.spyOn(api, 'runtimeHelpImport').mockResolvedValue({ plan: [
+      { key: 'secret', values: ['•••'] }, { key: 'label', values: ['fresh'] },
+    ], managed: [], unrecognized: [] });
+    const onChange = vi.fn();
+    render(<I18nProvider initialLocale="en"><ProviderOptions cfg={{ ...config, provider_options: { 'custom.synthetic': { secret: 'synthetic-credential', label: 'old' } } }} disabled={false} onChange={onChange} onInvalid={vi.fn()} /></I18nProvider>);
+    await screen.findByLabelText(/^--secret/);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Import command' }), { target: { value: "/synthetic/engine --secret '•••' --label fresh" } });
+    fireEvent.click(screen.getByRole('button', { name: 'Import command' }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(match.objectContaining({ provider_options: match.objectContaining({
+      'custom.synthetic': match.objectContaining({ secret: 'synthetic-credential', label: 'fresh' }) }) })));
+    expect(await screen.findByText(/were not imported; the saved values were kept: secret/)).toBeVisible();
+    imported.mockRestore();
+  });
+
+  it('shows the command with the reason launch is blocked and flags hidden secrets', async () => {
+    const preview = vi.spyOn(api, 'providerCommandPreview').mockResolvedValue({
+      argv: ['/synthetic/engine', '--workers', '2', '--token', '[REDACTED]'],
+      launch_blocked: 'selected model requires a fresh adapter probe',
+    });
+    render(<I18nProvider initialLocale="en"><ProviderOptions cfg={{ ...config, provider_options: { 'custom.synthetic': { workers: 2 } } }} disabled={false} onChange={vi.fn()} onInvalid={vi.fn()} /></I18nProvider>);
+    await screen.findByLabelText(/^--workers/);
+    fireEvent.click(screen.getByRole('button', { name: 'Command preview' }));
+    expect(await findCommand("/synthetic/engine \\\n  --workers 2 \\\n  --token '[REDACTED]'")).toBeVisible();
+    expect(screen.getByText(/Launch is still blocked: selected model requires a fresh adapter probe/)).toBeVisible();
+    expect(screen.getByText(/hidden secret values/)).toBeVisible();
+    preview.mockRestore();
   });
 
   it('keeps saved help values when the runtime changed and says why launch is blocked', async () => {

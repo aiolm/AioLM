@@ -7,7 +7,7 @@ import { withoutCancelledTrials } from './benchmarkCancellation';
 import { defined } from '../../testing/assertDefined';
 import { servingBenchmark } from '../../testing/servingBenchmark';
 import {
-  PERFORMANCE_HISTORY_KEY, isPerformanceRecord, performanceCsv, readPerformanceHistory, savePerformanceRecord,
+  PERFORMANCE_HISTORY_KEY, benchmarkHistoryModelLabel, isPerformanceRecord, performanceCsv, readPerformanceHistory, savePerformanceRecord,
 } from './performanceRecords.ts';
 
 function row(overrides: Partial<PerformanceBenchmarkRow> = {}): PerformanceBenchmarkRow {
@@ -47,6 +47,31 @@ describe('performance history and export', () => {
       const changed = structuredClone(saved);
       mutate(changed);
       expect(isPerformanceRecord(changed)).toBe(false);
+    }
+  });
+
+  it('accepts optional string-array engine_args and rejects invalid engine_args shapes', () => {
+    const valid = servingBenchmark();
+    valid.result.engine_args = ['/synthetic/engine', '--model', '/synthetic/model.gguf'];
+    expect(isPerformanceRecord(valid)).toBe(true);
+    for (const bad of ['not-an-array', [123], ['/synthetic/engine', null]]) {
+      const invalid = structuredClone(valid);
+      Object.assign(invalid.result, { engine_args: bad });
+      expect(isPerformanceRecord(invalid)).toBe(false);
+    }
+  });
+
+  it('accepts an optional string engine_args_error and keeps records without it valid', () => {
+    const legacy = servingBenchmark();
+    expect(legacy.result.engine_args_error).toBeUndefined();
+    expect(isPerformanceRecord(legacy)).toBe(true);
+    const failed = structuredClone(legacy);
+    failed.result.engine_args_error = 'synthetic capture failure';
+    expect(isPerformanceRecord(failed)).toBe(true);
+    for (const bad of [42, ['synthetic'], null]) {
+      const invalid = structuredClone(legacy);
+      Object.assign(invalid.result, { engine_args_error: bad });
+      expect(isPerformanceRecord(invalid)).toBe(false);
     }
   });
 
@@ -273,5 +298,21 @@ describe('performance history and export', () => {
     expect(csv).toContain('"모델","측정 시각"');
     expect(csv).toContain('"한글.gguf"');
     expect(csv).not.toMatch(/synthetic|example|models|\\|\/synthetic/);
+  });
+
+  it('normalizes legacy shard-suffixed recorded_model_label values in history labels', () => {
+    for (const recorded of [
+      'Qwen-Q4_K_M-00001-of-00004.gguf',
+      'Qwen-Q4_K_M-0001-of-0004.gguf',
+      'Qwen-Q4_K_M-00001-of-00002.safetensors',
+    ]) {
+      const saved = record();
+      saved.result.provenance!.recorded_model_label = recorded;
+      const expected = recorded.endsWith('.safetensors') ? 'Qwen-Q4_K_M.safetensors' : 'Qwen-Q4_K_M.gguf';
+      expect(benchmarkHistoryModelLabel(saved)).toBe(expected);
+    }
+    const selected = record();
+    selected.result.provenance!.recorded_model_label = 'variants · 4bit/model-0001-of-0004.safetensors';
+    expect(benchmarkHistoryModelLabel(selected)).toBe('variants · 4bit/model.safetensors');
   });
 });

@@ -664,24 +664,152 @@ describe("Performance benchmark workflow", () => {
     expect(await screen.findByText("Download started.")).toBeVisible();
   });
 
-  it("shows one effective llama-server argument per line and keeps each option with its value", async () => {
+  it("shows one effective llama-server argument per line, keeps negative values with options, and lets users switch shell formats and copy", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     mocked.runPerformanceBench.mockImplementation(async (_cfg, request) => ({
       ...result(request.run_id, [row()]),
-      args: ["--model", "C:/models/test.gguf", "--ctx-size", "4096", "--sleep-idle-seconds", "-1", "--cont-batching", "--no-webui"],
+      args: [String.raw`\\?\C:\models\llama-server.exe`, "--model", String.raw`\\?\UNC\fileserver\share\한글 test.gguf`, "--ctx-size", "4096", "--sleep-idle-seconds", "-1", "--cont-batching", "--no-webui"],
     }));
     renderPanel();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
-    const summary = await screen.findByText("Effective runtime arguments");
+    const summary = await screen.findByText("Launch command");
+    const details = summary.closest("details")!;
     fireEvent.click(summary);
-    // A negative value belongs to its option; a switch stays on a line of its own.
-    expect(summary.parentElement?.querySelector("code")?.textContent).toBe([
-      '"--model" "C:/models/test.gguf"',
-      '"--ctx-size" "4096"',
-      '"--sleep-idle-seconds" "-1"',
-      '"--cont-batching"',
-      '"--no-webui"',
+    const pre = details.querySelector("pre")!;
+    // Switch to explicit POSIX quoting so host UA does not affect the exact expected string.
+    fireEvent.click(within(details).getByRole("combobox", { name: "Shown and copied as" }));
+    fireEvent.click(screen.getByRole("option", { name: "POSIX argument quoting" }));
+    expect(pre.textContent).toBe([
+      "'C:\\models\\llama-server.exe' \\",
+      "  --model '\\\\fileserver\\share\\한글 test.gguf' \\",
+      "  --ctx-size 4096 \\",
+      "  --sleep-idle-seconds -1 \\",
+      "  --cont-batching \\",
+      "  --no-webui",
     ].join("\n"));
+    expect(details.textContent).not.toContain("\\\\?\\");
+    expect(within(details).queryByRole("combobox", { name: "Command" })).not.toBeInTheDocument();
+    expect(within(details).queryByText(/does not include the command that runs the inference engine/)).not.toBeInTheDocument();
+
+    const multiline = within(details).getByRole("checkbox", { name: "One option per line" });
+    fireEvent.click(multiline);
+    expect(pre.textContent).toBe(
+      "'C:\\models\\llama-server.exe' --model '\\\\fileserver\\share\\한글 test.gguf' --ctx-size 4096 --sleep-idle-seconds -1 --cont-batching --no-webui",
+    );
+
+    fireEvent.click(within(details).getByRole("button", { name: "Copy command" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(pre.textContent));
+    expect(await within(details).findByText("Copied")).toBeVisible();
+  });
+
+  it("shows direct engine command and helper command toggle plus secret notice for automatic recorded runs", async () => {
+    mocked.runPerformanceBench.mockImplementation(async (_cfg, request) => ({
+      ...result(request.run_id, [row()]),
+      args: ["/synthetic/aiolm-helper", "serve", "--", "aiolm-auto-argv-v1", '{"version":1}'],
+      engine_args: ["/synthetic/engine", "serve", "--model", "/synthetic/한글 model.gguf", "--api-key", "[redacted]"],
+    }));
+    renderPanel();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
+    const summary = await screen.findByText("Launch command");
+    const details = summary.closest("details")!;
+    fireEvent.click(summary);
+    const pre = details.querySelector("pre")!;
+    fireEvent.click(within(details).getByRole("combobox", { name: "Shown and copied as" }));
+    fireEvent.click(screen.getByRole("option", { name: "POSIX argument quoting" }));
+    expect(pre.textContent).toBe("/synthetic/engine serve \\\n  --model '/synthetic/한글 model.gguf' \\\n  --api-key '[redacted]'");
+    expect(within(details).getByText(/stand for hidden secret values/)).toBeVisible();
+    expect(within(details).getByText(/for this benchmark run/)).toBeVisible();
+
+    fireEvent.click(within(details).getByRole("combobox", { name: "Command" }));
+    fireEvent.click(screen.getByRole("option", { name: "Command AioLM runs" }));
+    expect(pre.textContent).toBe("/synthetic/aiolm-helper serve \\\n  -- aiolm-auto-argv-v1 '{\"version\":1}'");
+    expect(within(details).queryByText(/stand for hidden secret values/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the command kind choice for a saved automatic run that recorded the engine command", async () => {
+    const saved = historyRecord('saved-engine');
+    saved.result.args = ["/synthetic/aiolm", "--internal-runtime-auto", "serve", "/synthetic/connection.json"];
+    saved.result.engine_args = ["/synthetic/engine", "serve", "--port", "8080"];
+    localStorage.setItem(PERFORMANCE_HISTORY_KEY, JSON.stringify([saved]));
+    renderPanel();
+    fireEvent.click(screen.getByRole("combobox", { name: "Result history" }));
+    fireEvent.click(defined(within(screen.getByRole("listbox")).getAllByRole("option")[1]));
+    const summary = await screen.findByText("Launch command");
+    const details = summary.closest("details")!;
+    fireEvent.click(summary);
+    fireEvent.click(within(details).getByRole("checkbox", { name: "One option per line" }));
+    const pre = details.querySelector("pre")!;
+    expect(pre.textContent).toContain("/synthetic/engine serve --port 8080");
+    expect(within(details).queryByText(/does not include the command that runs the inference engine/)).not.toBeInTheDocument();
+    fireEvent.click(within(details).getByRole("combobox", { name: "Command" }));
+    fireEvent.click(screen.getByRole("option", { name: "Command AioLM runs" }));
+    expect(pre.textContent).toContain("/synthetic/aiolm --internal-runtime-auto serve /synthetic/connection.json");
+  });
+
+  it("explains the unrecorded {port} binding only for the recorded engine command", async () => {
+    mocked.runPerformanceBench.mockImplementation(async (_cfg, request) => ({
+      ...result(request.run_id, [row()]),
+      args: ["/synthetic/aiolm", "--internal-runtime-auto", "serve", "/synthetic/connection.json", "43210"],
+      engine_args: ["/synthetic/engine", "serve", "--host=127.0.0.1", "--port={port}"],
+    }));
+    renderPanel();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
+    const summary = await screen.findByText("Launch command");
+    const details = summary.closest("details")!;
+    fireEvent.click(summary);
+    fireEvent.click(within(details).getByRole("combobox", { name: "Shown and copied as" }));
+    fireEvent.click(screen.getByRole("option", { name: "POSIX argument quoting" }));
+    fireEvent.click(within(details).getByRole("checkbox", { name: "One option per line" }));
+    const pre = details.querySelector("pre")!;
+    expect(pre.textContent).toBe("/synthetic/engine serve --host=127.0.0.1 '--port={port}'");
+    expect(pre.textContent).not.toContain("43210");
+    expect(within(details).getByText(/marks the port, which was not recorded/)).toBeVisible();
+    fireEvent.click(within(details).getByRole("combobox", { name: "Command" }));
+    fireEvent.click(screen.getByRole("option", { name: "Command AioLM runs" }));
+    expect(pre.textContent).toContain("43210");
+    expect(within(details).queryByText(/marks the port, which was not recorded/)).not.toBeInTheDocument();
+  });
+
+  it("tells a failed engine command capture apart from a record made before capture existed", async () => {
+    mocked.runPerformanceBench.mockImplementation(async (_cfg, request) => ({
+      ...result(request.run_id, [row()]),
+      args: ["/synthetic/aiolm", "--internal-runtime-auto", "serve", "/synthetic/connection.json"],
+      engine_args_error: "synthetic capture failure",
+    }));
+    renderPanel();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
+    const summary = await screen.findByText("Launch command");
+    const details = summary.closest("details")!;
+    fireEvent.click(summary);
+    expect(within(details).queryByRole("combobox", { name: "Command" })).not.toBeInTheDocument();
+    expect(within(details).getByText(/could not be recorded for this run.*synthetic capture failure/)).toBeVisible();
+    expect(within(details).queryByText(/does not include the command that runs the inference engine/)).not.toBeInTheDocument();
+  });
+
+  it("shows only the helper command and says why for an automatic run recorded without the engine command", async () => {
+    mocked.runPerformanceBench.mockImplementation(async (_cfg, request) => ({
+      ...result(request.run_id, [row()]),
+      args: ["/synthetic/aiolm", "--internal-runtime-auto", "serve", "/synthetic/connection.json", "--", "aiolm-auto-argv-v1", '{"version":1}'],
+    }));
+    renderPanel();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
+    const summary = await screen.findByText("Launch command");
+    const details = summary.closest("details")!;
+    fireEvent.click(summary);
+    fireEvent.click(within(details).getByRole("combobox", { name: "Shown and copied as" }));
+    fireEvent.click(screen.getByRole("option", { name: "POSIX argument quoting" }));
+    fireEvent.click(within(details).getByRole("checkbox", { name: "One option per line" }));
+    expect(details.querySelector("pre")!.textContent).toBe(
+      "/synthetic/aiolm --internal-runtime-auto serve /synthetic/connection.json -- aiolm-auto-argv-v1 '{\"version\":1}'",
+    );
+    expect(within(details).queryByRole("combobox", { name: "Command" })).not.toBeInTheDocument();
+    expect(within(details).getByText(/does not include the command that runs the inference engine directly/)).toBeVisible();
   });
 
   it("keeps current and history exports separate when the new result could not be saved", async () => {

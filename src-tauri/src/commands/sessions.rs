@@ -5,7 +5,6 @@ use super::server::{
 };
 use crate::error::AppError;
 use crate::{config, server, session, state::AppState};
-use std::path::Path;
 use std::sync::atomic::Ordering;
 use tauri::State;
 use uuid::Uuid;
@@ -66,11 +65,11 @@ pub(super) async fn run_session_start(
         None => config::load_result()?.stop_existing_sessions_on_load,
     };
     ensure_no_active_requests(state, &id, policy)?;
-    let name = Path::new(cfg.active_model.trim())
-        .file_name()
-        .map(|value| value.to_string_lossy().into_owned())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| id.clone());
+    let name = Some(crate::model_names::resolve_display_name(
+        cfg.active_model.trim(),
+    ))
+    .filter(|value| !value.is_empty())
+    .unwrap_or_else(|| id.clone());
 
     let prepared = prepare_launch(
         state,

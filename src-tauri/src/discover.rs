@@ -1017,29 +1017,12 @@ fn listed_gguf_files(
         .collect()
 }
 
-/// GGUF's standard multi-part suffix is `-00001-of-00033.gguf`. Generates the
-/// group in order, without allocating names just to recognize a split model.
+/// GGUF's standard multi-part suffix is `-00001-of-00033.gguf` (four-digit
+/// parts are accepted too). Generates the group in order, without allocating
+/// names just to recognize a split model.
 pub(crate) fn shard_group(name: &str) -> Option<impl Iterator<Item = String> + '_> {
-    let (stem, extension) = name.rsplit_once('.')?;
-    if !extension.eq_ignore_ascii_case("gguf") {
-        return None;
-    }
-    let (prefix, total) = stem.rsplit_once("-of-")?;
-    let (base, index) = prefix.rsplit_once('-')?;
-    if base.is_empty()
-        || index.len() != 5
-        || total.len() != 5
-        || !index.bytes().all(|byte| byte.is_ascii_digit())
-        || !total.bytes().all(|byte| byte.is_ascii_digit())
-    {
-        return None;
-    }
-    let index: usize = index.parse().ok()?;
-    let total: usize = total.parse().ok()?;
-    if total <= 1 || index == 0 || index > total {
-        return None;
-    }
-    Some((1..=total).map(move |part| format!("{base}-{part:05}-of-{total:05}.{extension}")))
+    let parts = crate::model_names::parse_gguf_shard(name)?;
+    Some((1..=parts.total).map(move |part| parts.format_part(part)))
 }
 
 fn installed_file_metadata(target: &Path, root: &Path) -> Option<fs::Metadata> {
@@ -1395,23 +1378,7 @@ pub async fn download(
         .ok_or_else(|| AppError::validation("model download has no files"))?
         .path
         .clone();
-    let label = if plan.len() > 1 {
-        let (stem, extension) = entrypoint
-            .rsplit_once('.')
-            .ok_or_else(|| AppError::validation("invalid GGUF path"))?;
-        let (prefix, _) = stem
-            .rsplit_once("-of-")
-            .ok_or_else(|| AppError::validation("invalid GGUF shard"))?;
-        format!(
-            "{}.{extension}",
-            prefix
-                .rsplit_once('-')
-                .ok_or_else(|| AppError::validation("invalid GGUF shard"))?
-                .0
-        )
-    } else {
-        entrypoint.clone()
-    };
+    let label = crate::model_names::strip_shard_suffix(&entrypoint);
     let companions = if include_companions {
         if cancel.load(Ordering::Acquire) {
             return Err(AppError::cancelled(DOWNLOAD_CANCELLED));

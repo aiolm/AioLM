@@ -23,7 +23,9 @@ const en = {
   exportAllCsv: "Export all history", contextSize: "Server context tokens", parallel: "Server request slots", runtimeVersion: "Runtime version", enabled: "Enabled", disabled: "Disabled",
   tableColumns: "More columns", previousColumns: "Previous table columns", nextColumns: "Next table columns",
   columnsHint: "Use the left and right arrow keys to move between columns. Home and End go to the first and last columns.",
-  effectiveArgs: "Effective runtime arguments",
+  effectiveArgs: "Launch command",
+  engineCommandCaptureFailed: "The command that runs the inference engine directly could not be recorded for this run, so only the command AioLM ran is shown. The measurement was not affected. Reason:",
+  engineCommandNotRecorded: "This record does not include the command that runs the inference engine directly, so only the command AioLM ran is shown. A new run records both.",
 } as const;
 
 type BenchmarkCopy = { [K in keyof typeof en]: string };
@@ -50,7 +52,9 @@ const ko: BenchmarkCopy = {
   exportAllCsv: "전체 이력 내보내기", contextSize: "서버 컨텍스트 토큰", parallel: "서버 요청 슬롯", runtimeVersion: "런타임 버전", enabled: "사용", disabled: "사용 안 함",
   tableColumns: "표의 다른 열", previousColumns: "표의 이전 열", nextColumns: "표의 다음 열",
   columnsHint: "좌우 방향키로 표의 열을 이동합니다. Home과 End로 처음과 마지막 열로 이동합니다.",
-  effectiveArgs: "실제 런타임 인자",
+  effectiveArgs: "실행 명령어",
+  engineCommandCaptureFailed: "이 실행에서는 추론 엔진을 직접 실행하는 명령을 기록하지 못해 AioLM이 실행한 명령만 표시합니다. 측정에는 영향이 없습니다. 원인:",
+  engineCommandNotRecorded: "이 기록에는 추론 엔진을 직접 실행하는 명령이 저장되어 있지 않아 AioLM이 실행한 명령만 표시합니다. 다시 측정하면 두 명령이 모두 기록됩니다.",
 };
 
 const ja: BenchmarkCopy = {
@@ -75,7 +79,9 @@ const ja: BenchmarkCopy = {
   exportAllCsv: "すべての履歴を書き出す", contextSize: "サーバーのコンテキストトークン", parallel: "サーバーのリクエスト枠", runtimeVersion: "ランタイムバージョン", enabled: "有効", disabled: "無効",
   tableColumns: "他の列", previousColumns: "表の前の列", nextColumns: "表の次の列",
   columnsHint: "左右の矢印キーで列を移動します。HomeとEndで最初と最後の列に移動します。",
-  effectiveArgs: "実際のランタイム引数",
+  effectiveArgs: "起動コマンド",
+  engineCommandCaptureFailed: "この実行では推論エンジンを直接起動するコマンドを記録できなかったため、AioLM が実行したコマンドだけを表示します。測定には影響ありません。原因:",
+  engineCommandNotRecorded: "この記録には推論エンジンを直接起動するコマンドが保存されていないため、AioLM が実行したコマンドだけを表示します。もう一度測定すると両方のコマンドが記録されます。",
 };
 
 const zh: BenchmarkCopy = {
@@ -100,7 +106,9 @@ const zh: BenchmarkCopy = {
   exportAllCsv: "导出全部历史", contextSize: "服务器上下文令牌", parallel: "服务器请求槽位", runtimeVersion: "运行时版本", enabled: "启用", disabled: "禁用",
   tableColumns: "更多列", previousColumns: "表格的前一组列", nextColumns: "表格的后一组列",
   columnsHint: "使用左右方向键移动列。Home 和 End 可移至第一列和最后一列。",
-  effectiveArgs: "实际运行时参数",
+  effectiveArgs: "启动命令",
+  engineCommandCaptureFailed: "本次运行未能记录直接运行推理引擎的命令，因此仅显示 AioLM 运行的命令。测量不受影响。原因：",
+  engineCommandNotRecorded: "此记录未保存直接运行推理引擎的命令，因此仅显示 AioLM 运行的命令。重新测量后会同时记录两条命令。",
 };
 
 const servingEn = {

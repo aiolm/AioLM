@@ -3,6 +3,10 @@ import type { OptionSchemaDefinition } from '../../shared/api/runtimeHelp';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
 import { OccurrenceOrder } from './OccurrenceOrder';
+import { formatCommandLine, hostCommandLineSyntax } from '../../shared/lib/commandLine';
+import CopyTextButton from '../../shared/ui/CopyTextButton';
+import { commandToolsCopy } from '../model-settings/commandToolsCopy';
+import { useI18n } from '../../shared/i18n/i18n';
 import { SchemaOptionField } from './SchemaOptionField';
 import { needsWideCard } from './SchemaOptionValueInput';
 import { setOccurrenceSpelling } from './optionOrder';
@@ -19,6 +23,7 @@ const DEFERRED_FROM = 12;
 const deferredStyle: CSSProperties = { contentVisibility: 'auto', containIntrinsicSize: 'auto none auto 96px' };
 
 export function RuntimeOptionSchemaFormView({ controller }: { controller: Controller }) {
+  const { locale } = useI18n();
   const { schema, values, scope, disabled, onChange, compact, showAll, showNoMatch,
     readOnlyForOption, inheritLabel, hint, onInvalid, onConfirmSyntax, confirmSyntaxFor,
     copy, formId, search, group, groups, limit, visible, changeSearch, changeGroup, showMore,
@@ -63,14 +68,15 @@ export function RuntimeOptionSchemaFormView({ controller }: { controller: Contro
       ))}
       {error && <FeedbackBanner tone="error">{error}</FeedbackBanner>}
       {fieldGrid}
-      <OccurrenceOrder schema={schema} values={values} disabled={disabled} onChange={onChange} />
+      <OccurrenceOrder values={values} disabled={disabled} onChange={onChange} />
       {more}
       {showNoMatch && visible.length === 0 && <p className="app-section-hint">{copy.noMatch}</p>}
       <CommandImport controller={controller} />
       <div aria-live="polite">
         <h4>{copy.preview}</h4>
         {masked === null ? <p className="app-section-hint">{copy.previewPending}</p>
-          : <pre className="overflow-auto whitespace-pre-wrap">{masked.map(token => JSON.stringify(token)).join(' ')}</pre>}
+          : <><pre className="overflow-auto whitespace-pre-wrap">{formatCommandLine(masked, hostCommandLineSyntax())}</pre>
+            <CopyTextButton text={formatCommandLine(masked, hostCommandLineSyntax())} labels={commandToolsCopy[locale]} /></>}
       </div>
     </div>
   );

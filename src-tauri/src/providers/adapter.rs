@@ -205,7 +205,9 @@ impl InferenceRuntimeAdapter for BuiltinAdapter {
                 path.display()
             )));
         }
-        Ok(path.to_string_lossy().into_owned())
+        Ok(crate::verbatim_path::strip_windows_verbatim_prefix(path)
+            .to_string_lossy()
+            .into_owned())
     }
     fn launch(
         &self,
@@ -231,7 +233,9 @@ impl InferenceRuntimeAdapter for BuiltinAdapter {
         cfg.port = port;
         let args = native_arguments(&cfg, key, gpu).map_err(crate::error::AppError::validation)?;
         let aliases = native_model_aliases(&args);
-        let upstream_model = aliases.first().unwrap_or(&cfg.active_model).clone();
+        let upstream_model = aliases.first().cloned().unwrap_or_else(|| {
+            crate::verbatim_path::strip_windows_verbatim_prefix_str(&cfg.active_model).into_owned()
+        });
         Ok(EngineCommand {
             program: PathBuf::from(self.executable(&cfg)?),
             args,
@@ -254,10 +258,13 @@ impl InferenceRuntimeAdapter for BuiltinAdapter {
         if self.kind() == RuntimeKind::Native {
             let args = native_arguments(cfg, "", &ResolvedGpu::default())?;
             let aliases = native_model_aliases(&args);
-            let model = aliases.first().unwrap_or(&cfg.active_model);
-            info.upstream_model = model.to_owned();
+            let model = aliases.first().cloned().unwrap_or_else(|| {
+                crate::verbatim_path::strip_windows_verbatim_prefix_str(&cfg.active_model)
+                    .into_owned()
+            });
+            info.upstream_model = model.clone();
             if info.embedding_model.is_some() {
-                info.embedding_model = Some(model.to_owned());
+                info.embedding_model = Some(model);
             }
         }
         Ok(info)

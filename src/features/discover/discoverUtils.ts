@@ -1,8 +1,20 @@
 import type { HfInstalledFile } from "../../shared/api/models.ts";
 import type { HfFile, HfSnapshotFile } from "../../shared/api/types.ts";
 import type { ModelArtifact } from "../../shared/api/providers.ts";
+import { formatModelShardPart, parseModelShardSuffix, type ParseModelShardOptions } from "../../shared/lib/displayPaths.ts";
 
 const SAFE_HF_COMPONENT = /^[^<>:"|?*\u0000-\u001f]+$/;
+
+/** Repository GGUF names accept any extension case; the other rules match the Rust parser. */
+const GGUF_SHARD: ParseModelShardOptions = { extensions: ['gguf'], allowExtensionless: false };
+/** Safetensors repository paths are exact: only the lowercase extension names a split group. */
+const SAFETENSORS_SHARD: ParseModelShardOptions = { extensions: ['safetensors'], allowExtensionless: false, exactExtensionCase: true };
+
+/** Split a repository path into its folder prefix and the parsed part of its file name. */
+function splitShardFile(path: string, options: ParseModelShardOptions) {
+  const name = path.split("/").pop() ?? path;
+  return { folder: path.slice(0, path.length - name.length), shard: parseModelShardSuffix(name, options) };
+}
 
 export function validateHfRepoId(value: string): boolean {
   const repo = value.trim();
@@ -34,18 +46,16 @@ export function quantLabel(path: string): string {
 
 /**
  * How many parts a multi-part GGUF has, read from its standard
- * `-00001-of-00033.gguf` suffix. Null for a single-file model.
+ * `-00001-of-00033.gguf` (or four-digit `-0001-of-0033.gguf`) suffix. Null for
+ * a single-file model.
  */
 export function shardTotal(path: string): number | null {
-  const name = path.split("/").pop() ?? path;
-  const match = name.match(/^.+-(\d{5})-of-(\d{5})\.gguf$/i);
-  const index = match ? Number(match[1]) : 0;
-  const total = match ? Number(match[2]) : 0;
-  return total > 1 && index > 0 && index <= total ? total : null;
+  return splitShardFile(path, GGUF_SHARD).shard?.total ?? null;
 }
 
 export function firstShard(path: string): string {
-  return shardTotal(path) ? path.replace(/-\d{5}-of-(\d{5})\.gguf$/i, '-00001-of-$1.gguf') : path;
+  const { folder, shard } = splitShardFile(path, GGUF_SHARD);
+  return shard ? `${folder}${formatModelShardPart(shard, 1)}` : path;
 }
 
 export interface HfFileGroup {
@@ -67,8 +77,9 @@ export function groupHfFiles(files: readonly HfFile[]): HfFileGroup[] {
       group.sizeBytes += file.size_bytes;
       if (file.path === key) group.file = file;
     } else {
+      const { folder, shard } = splitShardFile(file.path, GGUF_SHARD);
       groups.set(key, { file: { ...file, path: key }, files: [file], sizeBytes: file.size_bytes,
-        displayPath: shardTotal(file.path) ? file.path.replace(/-\d{5}-of-\d{5}(\.gguf)$/i, '$1') : file.path });
+        displayPath: shard ? `${folder}${shard.base}.${shard.extension ?? 'gguf'}` : file.path });
     }
   }
   return [...groups.values()].map(group => ({ ...group, files: group.files.sort((a, b) => a.path.localeCompare(b.path)) }));
@@ -102,12 +113,9 @@ export function groupSafetensorsFiles(files: readonly HfSnapshotFile[], bundles:
   }
   const groups = new Map<string, HfSafetensorsGroup>();
   for (const file of files) {
-    const match = file.path.match(/^(.+)-(\d{5})-of-(\d{5})\.safetensors$/);
-    const index = match ? Number(match[2]) : 0;
-    const total = match ? Number(match[3]) : 0;
-    const split = total > 1 && index > 0 && index <= total;
+    const { folder, shard } = splitShardFile(file.path, SAFETENSORS_SHARD);
     const resolved = membership.get(file.path);
-    const key = resolved?.canonical ?? (split ? file.path.replace(/-\d{5}-of-(\d{5})\.safetensors$/, '-00001-of-$1.safetensors') : file.path);
+    const key = resolved?.canonical ?? (shard ? `${folder}${formatModelShardPart(shard, 1)}` : file.path);
     const group = groups.get(key);
     if (group) {
       if (group.files.some(part => part.path === file.path)) continue;
@@ -116,10 +124,11 @@ export function groupSafetensorsFiles(files: readonly HfSnapshotFile[], bundles:
       group.missingParts = group.shardCount - group.files.length;
       if (file.path === key) group.file = file;
     } else {
+      const shardCount = resolved?.count ?? (shard ? shard.total : 1);
       groups.set(key, {
         file: { ...file, path: key }, files: [file], sizeBytes: file.size_bytes,
-        displayPath: split ? file.path.replace(/-\d{5}-of-\d{5}(\.safetensors)$/, '$1') : key,
-        shardCount: resolved?.count ?? (split ? total : 1), missingParts: (resolved?.count ?? (split ? total : 1)) - 1,
+        displayPath: shard ? `${folder}${shard.base}.safetensors` : key,
+        shardCount, missingParts: shardCount - 1,
       });
     }
   }
@@ -142,7 +151,8 @@ export function markInstalled(
   sizeBytes: number,
 ): Record<string, HfInstalledFile> {
   const name = path.split("/").pop() ?? path;
-  const total = shardTotal(path);
+  const { folder, shard } = splitShardFile(path, GGUF_SHARD);
+  const total = shard?.total ?? null;
   const group = firstShard(path);
   const next: Record<string, HfInstalledFile> = {};
   for (const [key, entry] of Object.entries(current)) {
@@ -154,7 +164,7 @@ export function markInstalled(
     path,
     local_path: localPath,
     size_bytes: sizeBytes,
-    missing_shards: total ? Array.from({ length: total }, (_, index) => path.replace(/-\d{5}-of-(\d{5})\.gguf$/i, `-${String(index + 1).padStart(5, '0')}-of-$1.gguf`))
+    missing_shards: shard && total ? Array.from({ length: total }, (_, index) => `${folder}${formatModelShardPart(shard, index + 1)}`)
       .filter(part => part !== path && !current[part]).map(part => part.split('/').pop()!) : [],
   };
   return next;

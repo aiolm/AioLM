@@ -39,6 +39,7 @@ describe('public benchmark boundary', () => {
     record.result.provenance!.runtime = { name: 'vllm', version: '0.30.0', backend: 'metal', build: '0.30.0', variant: 'vllm-metal', plugin_version: '0.30.0' };
     record.result.provenance!.model.format = format;
     record.result.args = ['/private/python', '--api-key', 'private-secret'];
+    record.result.engine_args = ['/private/engine', '--api-key', 'private-engine-secret'];
     const result = toPublicBenchmark(record, submissionId);
     expect(result.schema_version).toBe(4);
     expect(result.method.version).toBe(5);

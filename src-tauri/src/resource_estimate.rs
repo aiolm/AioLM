@@ -962,20 +962,16 @@ impl Disk {
 /// itself. Headers live in the first shard.
 fn model_files(path: &Path) -> Option<Vec<PathBuf>> {
     let name = path.file_name().and_then(|name| name.to_str());
-    let Some((base, _, total)) = name.and_then(crate::models::shard_name) else {
+    let Some(parts) = name.and_then(crate::model_names::parse_gguf_shard) else {
         return Some(vec![path.to_path_buf()]);
     };
-    if total > MAX_SHARDS {
+    if parts.total > MAX_SHARDS {
         return None;
     }
     let parent = path.parent().unwrap_or(Path::new(""));
-    let extension = path
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or("gguf");
     Some(
-        (1..=total)
-            .map(|index| parent.join(format!("{base}-{index:05}-of-{total:05}.{extension}")))
+        (1..=parts.total)
+            .map(|index| parent.join(parts.format_part(index)))
             .collect(),
     )
 }

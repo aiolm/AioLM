@@ -167,6 +167,17 @@ pub struct PerformanceBenchResult {
     pub message: Option<String>,
     /// Private sanitized final program and argv, never public settings.
     pub args: Vec<String>,
+    /// Private sanitized inference engine command when AioLM launches the
+    /// engine through its automatic helper; never included in public snapshots.
+    /// The helper chooses the engine's port itself, so a port binding is
+    /// recorded as `{port}` rather than as a port the engine never used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_args: Option<Vec<String>>,
+    /// Why a helper run's engine command could not be recorded. The
+    /// measurement continues without it; records made before engine commands
+    /// were recorded have neither field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_args_error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) provenance: Option<ServingBenchmarkProvenance>,
 }
@@ -336,6 +347,8 @@ pub fn failed(
         status: "failed",
         message: Some(message),
         args: vec![],
+        engine_args: None,
+        engine_args_error: None,
         provenance: None,
     }
 }
@@ -366,6 +379,89 @@ fn redacted_args(args: Vec<String>) -> Vec<String> {
             argument
         })
         .collect()
+}
+
+/// Strip recognized Windows verbatim path prefixes (`\\?\`, `\\?\UNC\`) before
+/// applying launch-option redaction. Preserves 1:1 token correspondence between
+/// `raw` and `masked` so benchmark settings capture remains aligned.
+fn sanitize_captured_argv(
+    registry_root: &std::path::Path,
+    isolated: &AppConfig,
+    program: &std::path::Path,
+    args: &[String],
+) -> (Vec<String>, Vec<String>) {
+    let argv: Vec<String> = std::iter::once(
+        crate::verbatim_path::strip_windows_verbatim_prefix_str(program.to_string_lossy().as_ref())
+            .into_owned(),
+    )
+    .chain(
+        args.iter()
+            .map(|arg| crate::verbatim_path::strip_windows_verbatim_prefix_arg(arg).into_owned()),
+    )
+    .collect();
+    let masked = crate::providers::runtime_schema::mask_argv(
+        registry_root,
+        isolated,
+        redacted_args(argv.clone()),
+        "[redacted]",
+    );
+    (argv, masked)
+}
+
+/// `Ok(None)` when AioLM runs the engine's own command (no helper). An error
+/// is a helper run whose engine command could not be rebuilt; the caller
+/// records the reason and the measurement continues.
+fn capture_engine_args_for_manifest(
+    registry_root: &std::path::Path,
+    isolated: &AppConfig,
+    manifest: &crate::providers::registry::RuntimeManifest,
+) -> Result<Option<Vec<String>>, AppError> {
+    let Some(engine_argv) =
+        crate::providers::runtime_auto::engine_command_record(registry_root, isolated, manifest)?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(crate::providers::runtime_schema::mask_argv(
+        registry_root,
+        isolated,
+        redacted_args(engine_argv),
+        "[redacted]",
+    )))
+}
+
+fn capture_engine_args(
+    registry_root: &std::path::Path,
+    isolated: &AppConfig,
+) -> Result<Option<Vec<String>>, AppError> {
+    let provider = crate::providers::provider_of(isolated);
+    if !provider.is_custom() {
+        return Ok(None);
+    }
+    let manifest = crate::providers::registry::manifest(provider, &isolated.active_runtime)?;
+    capture_engine_args_for_manifest(registry_root, isolated, &manifest)
+}
+
+/// Stores the captured engine command, or the reason it is missing, on the
+/// result; the returned warning follows the launch-settings warning path.
+fn record_engine_args(
+    result: &mut PerformanceBenchResult,
+    captured: Result<Option<Vec<String>>, AppError>,
+) -> Option<String> {
+    match captured {
+        Ok(engine_args) => {
+            result.engine_args = engine_args;
+            result.engine_args_error = None;
+            None
+        }
+        Err(error) => {
+            result.engine_args = None;
+            result.engine_args_error = Some(error.message.clone());
+            Some(format!(
+                "The inference engine command was not recorded; serving measurement continues: {}",
+                error.message
+            ))
+        }
+    }
 }
 
 struct IsolatedServer {
@@ -680,15 +776,15 @@ impl RuntimeInfo {
         }
         let (workload, input_texts) = prepare_inputs(&effective);
         let model_path = PathBuf::from(&cfg.active_model);
-        let label = model_path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        let active_model = cfg.active_model.clone();
         let root = crate::benchmark::data_root()?;
-        let model = tokio::task::spawn_blocking(move || {
+        // The frozen label is the model's display name: no directory, revision
+        // hash or split-part suffix.
+        let (label, model) = tokio::task::spawn_blocking(move || {
+            let label = crate::model_names::resolve_display_name(&active_model);
             let mut identity = crate::benchmark::identity::capture(&root, &model_path);
             identity.metadata = crate::benchmark::model_metadata::collect(&root, &model_path);
-            identity
+            (label, identity)
         })
         .await
         .map_err(AppError::from)?;
@@ -969,16 +1065,19 @@ pub async fn run(
         let key = format!("bench-{}",uuid::Uuid::new_v4().simple());
         let ring = Arc::new(server::ErrBuf::default());
         let mut settings_warning = None;
+        let mut engine_warning = None;
         let mut capture = |program: &std::path::Path, args: &[String]| {
-            let argv: Vec<String> = std::iter::once(program.to_string_lossy().into_owned()).chain(args.iter().cloned()).collect();
-            result.args = crate::providers::runtime_schema::mask_argv(&crate::providers::registry::root(),&isolated,redacted_args(argv.clone()),"[redacted]");
+            let registry_root = crate::providers::registry::root();
+            let (argv, masked) = sanitize_captured_argv(&registry_root, &isolated, program, args);
+            result.args = masked;
+            engine_warning = record_engine_args(&mut result, capture_engine_args(&registry_root, &isolated));
             let provenance = result.provenance.as_mut().expect("frozen provenance");
             provenance.environment.host.execution =
                 crate::benchmark::provenance::capture_serving_gpu_execution(
                     &isolated, &gpu_profile, &gpu, args,
                 );
             let request_slots = provenance.execution.settings.len();
-            let captured = crate::providers::runtime_schema::effective(&crate::providers::registry::root(), &isolated, false)
+            let captured = crate::providers::runtime_schema::effective(&registry_root, &isolated, false)
                 .and_then(|effective| Ok(crate::providers::runtime_schema::capture_benchmark_settings(&effective, &argv, &result.args, request_slots)?));
             match captured {
                 Ok(captured) => {
@@ -1003,7 +1102,7 @@ pub async fn run(
         { let mut state = shared.lock().map_err(|_| "benchmark process lock was poisoned")?; state.child = Some(child); state.engine = Some(engine); }
         managed = Some(IsolatedServer { state: shared.clone(),key_file,active_process: active_process.clone() });
         *active_process.lock().unwrap_or_else(|e| e.into_inner()) = process_handle.clone();
-        if let Some(warning) = settings_warning {
+        for warning in [settings_warning, engine_warning].into_iter().flatten() {
             emit(&progress, &request, "loading", 0, None, Some(warning));
         }
         tokio::select! { biased;

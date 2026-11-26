@@ -453,11 +453,7 @@ pub(super) fn with_git_ceiling(
 }
 
 fn strip_verbatim_prefix(path: &Path) -> PathBuf {
-    let text = path.to_string_lossy();
-    match text.strip_prefix(r"\\?\") {
-        Some(rest) if !rest.starts_with("UNC\\") => PathBuf::from(rest),
-        _ => path.to_path_buf(),
-    }
+    crate::verbatim_path::strip_windows_verbatim_prefix(path.to_path_buf())
 }
 
 /// llama.cpp's CMake keeps an explicitly defined `LLAMA_BUILD_COMMIT`, so the

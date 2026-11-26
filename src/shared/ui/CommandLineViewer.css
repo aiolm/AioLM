@@ -1,0 +1,33 @@
+/* Shared command preview/record viewer: adapts controls to its own inline width
+   via a container query so both narrow sidebars (Benchmark setup) and wide
+   settings/results panes align cleanly without viewport-only assumptions. */
+.command-line-viewer { container: command-viewer / inline-size; min-width: 0; }
+.command-line-viewer__block { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); background: var(--ui-panel); }
+.command-line-viewer__body { display: grid; gap: 10px; }
+.command-line-viewer .app-section-hint { margin: 0; }
+.command-line-viewer__controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; min-width: 0; }
+/* Narrow container default (stacked selects, left-aligned copy button). */
+.command-line-viewer .command-line-viewer__select { display: flex; flex-direction: column; gap: 4px; flex: 1 1 100%; min-width: 0; max-inline-size: none; color: var(--ui-ink); font-size: var(--ui-text-support); }
+.command-line-viewer__select > span { color: var(--ui-muted); font-size: var(--ui-text-caption); font-weight: 500; }
+.command-line-viewer__copy { align-items: center; margin-inline-start: 0; }
+.command-line-viewer__copy > .app-section-hint:empty { display: none; }
+/* Specificity (0,2,0) keeps the checkbox inline even inside .model-settings-fields label. */
+.command-line-viewer .command-line-viewer__check { display: inline-flex; flex-direction: row; align-items: center; gap: 8px; min-block-size: 32px; padding-inline: 2px; color: var(--ui-ink); font-size: var(--ui-text-support); cursor: pointer; user-select: none; }
+.command-line-viewer__checkbox { accent-color: var(--ui-accent); inline-size: 1.15em; aspect-ratio: 1; margin: 0; flex-shrink: 0; cursor: pointer; }
+.command-line-viewer__checkbox:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; border-radius: 2px; }
+.command-line-viewer__checkbox:disabled { opacity: 0.48; cursor: not-allowed; }
+.command-line-viewer .command-line-viewer__check:has(> .command-line-viewer__checkbox:disabled) { opacity: 0.48; cursor: not-allowed; }
+.command-line-viewer__pre { max-height: 240px; margin: 0; padding: 8px 12px; overflow: auto; border-radius: var(--ui-radius-control); background: var(--ui-mono-bg); color: var(--ui-mono-ink); font-family: var(--font-mono); font-size: var(--ui-text-support); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+@container command-viewer (min-width: 32rem) {
+  .command-line-viewer .command-line-viewer__select { flex: 0 1 13rem; min-inline-size: min(100%, 10rem); }
+  .command-line-viewer .command-line-viewer__select--wide { flex: 1 1 14rem; max-inline-size: 20rem; }
+  .command-line-viewer__copy { margin-inline-start: auto; }
+}
+
+@media (pointer: coarse) {
+  .command-line-viewer .command-line-viewer__check { min-block-size: 44px; }
+}
+@media (forced-colors: active) {
+  .command-line-viewer__checkbox:focus-visible { outline-color: Highlight; }
+}

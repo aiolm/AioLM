@@ -23,6 +23,7 @@
     "test:scripts": "node --test scripts/package-tauri.test.mjs scripts/smoke-provider-runtime.test.mjs scripts/frontend-ci.test.mjs scripts/release-ci.test.mjs scripts/ci-rust-toolchain.test.mjs scripts/ci-workflow-contract.test.mjs scripts/native-build-inputs.test.mjs scripts/install-entrypoint.test.mjs scripts/path-separators.test.mjs",
     "test:provider-runtime": "node --test scripts/smoke-provider-runtime.test.mjs && node scripts/smoke-provider-runtime.mjs --self-test",
     "test:native-cli": "node scripts/smoke-native-cli.mjs",
+    "test:command-line-shells": "node --experimental-strip-types scripts/smoke-command-line-shells.mjs",
     "test": "npm run test:unit",
     "test:coverage:run": "vitest run --coverage",
     "test:coverage": "npm run build:contracts && npm run test:coverage:run",

@@ -1385,3 +1385,302 @@ fn aggregation_averages_per_request_rates_and_requires_two_output_tokens_for_dec
     assert_eq!(row.tpot_ms, None);
     assert_eq!(row.decode_tokens_per_second, None);
 }
+
+#[test]
+fn sanitize_captured_argv_strips_windows_verbatim_prefixes_and_redacts_secrets() {
+    let cfg = AppConfig::default();
+    let root = crate::providers::registry::root();
+    let program = std::path::Path::new(r"\\?\C:\한글 엔진 dir\synthetic-engine.exe");
+    let raw_args = vec![
+        "--model".to_owned(),
+        r"\\?\C:\한글 모델\sub dir\weights.gguf".to_owned(),
+        r"--mmproj=\\?\UNC\fileserver\share\mmproj.gguf".to_owned(),
+        "--api-key".to_owned(),
+        "synthetic-secret-token".to_owned(),
+        r"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\keep.bin".to_owned(),
+    ];
+
+    let (argv, masked) = sanitize_captured_argv(&root, &cfg, program, &raw_args);
+    assert_eq!(
+        argv,
+        [
+            r"C:\한글 엔진 dir\synthetic-engine.exe",
+            "--model",
+            r"C:\한글 모델\sub dir\weights.gguf",
+            r"--mmproj=\\fileserver\share\mmproj.gguf",
+            "--api-key",
+            "synthetic-secret-token",
+            r"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\keep.bin",
+        ]
+    );
+    assert_eq!(
+        masked,
+        [
+            r"C:\한글 엔진 dir\synthetic-engine.exe",
+            "--model",
+            r"C:\한글 모델\sub dir\weights.gguf",
+            r"--mmproj=\\fileserver\share\mmproj.gguf",
+            "--api-key",
+            "[redacted]",
+            r"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\keep.bin",
+        ]
+    );
+    assert_eq!(argv.len(), masked.len());
+}
+
+#[test]
+fn capture_engine_args_returns_direct_engine_command_without_verbatim_prefix() {
+    use std::fs;
+    const CHILD: &str = "AIOLM_BENCHMARK_ENGINE_ARGS_FIXTURE";
+    const FILTER: &str =
+        "performance_bench::tests::capture_engine_args_returns_direct_engine_command_without_verbatim_prefix";
+    if std::env::var_os(CHILD).is_none() {
+        let base = fs::canonicalize(std::env::temp_dir()).unwrap();
+        let directory =
+            Directory(base.join(format!("aiolm-bench-engine-args-{}", uuid::Uuid::new_v4())));
+        fs::create_dir(&directory.0).unwrap();
+        let mut command = crate::procutil::std_command(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", FILTER, "--nocapture", "--test-threads=1"])
+            .env(CHILD, &directory.0)
+            .env("AIOLM_HOME", directory.0.join("aiolm home"));
+        let output = crate::procutil::capture_output_cancellable(
+            &mut command,
+            Duration::from_secs(45),
+            256 * 1024,
+            None,
+        )
+        .unwrap();
+        assert!(
+            output.status.success(),
+            "isolated engine_args fixture failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .any(|line| line.starts_with("test result: ok. 1 passed; 0 failed;")));
+        return;
+    }
+
+    let area = PathBuf::from(std::env::var_os(CHILD).unwrap());
+    let engine_dir = area.join("한글 엔진 dir");
+    fs::create_dir_all(&engine_dir).unwrap();
+    let engine = engine_dir.join("synthetic-engine.exe");
+    let model = engine_dir.join("한글 model.gguf");
+    let helper = std::env::current_exe().unwrap();
+    fs::write(&engine, b"synthetic engine").unwrap();
+    fs::write(&model, b"synthetic model").unwrap();
+
+    let root = crate::providers::registry::root();
+    let engine_id = crate::providers::ProviderId::parse("custom.auto-0123456789abcdef").unwrap();
+    let runtime_id = "connection-0123456789abcdef".to_string();
+    let conn_dir = root.join(engine_id.as_str()).join(&runtime_id);
+    fs::create_dir_all(&conn_dir).unwrap();
+    let conn_path = conn_dir.join("connection.json");
+    let verbatim_engine = format!(
+        r"\\?\{}",
+        engine.to_string_lossy().trim_start_matches(r"\\?\")
+    );
+    let verbatim_model = format!(
+        r"\\?\{}",
+        model.to_string_lossy().trim_start_matches(r"\\?\")
+    );
+    let spec_json = json!({
+        "version": 1,
+        "engine_id": engine_id.as_str(),
+        "runtime_id": runtime_id,
+        "target": {
+            "kind": "managed",
+            "launch": {
+                "program": verbatim_engine,
+                "args": ["serve", "--model", "{model}", "--port={port}", "--host={host}"],
+                "env": {},
+                "working_directory": null
+            },
+            "artifacts": []
+        },
+        "model_path": verbatim_model,
+        "served_alias": "synthetic-bench-model"
+    });
+    fs::write(&conn_path, serde_json::to_vec(&spec_json).unwrap()).unwrap();
+
+    let encoded_addr = base64::engine::Engine::encode(
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+        conn_path.to_string_lossy().as_bytes(),
+    );
+    let manifest: crate::providers::registry::RuntimeManifest = serde_json::from_value(json!({
+        "schema_version": 1,
+        "adapter_version": 1,
+        "engine_id": engine_id.as_str(),
+        "runtime_id": runtime_id,
+        "display_name": "Synthetic auto bench",
+        "platforms": [{"os": std::env::consts::OS, "arch": std::env::consts::ARCH}],
+        "protocol": "openai-v1",
+        "probe": {
+            "program": helper.to_string_lossy(),
+            "args": [
+                crate::providers::runtime_auto::INTERNAL,
+                "probe",
+                encoded_addr,
+                "{model}"
+            ],
+            "env": {},
+            "working_directory": null
+        },
+        "launch": {
+            "program": helper.to_string_lossy(),
+            "args": [
+                crate::providers::runtime_auto::INTERNAL,
+                "serve",
+                encoded_addr,
+                "{model}",
+                "{port}"
+            ],
+            "env": {"AIO_CONNECT_KEY": "{api_key}"},
+            "working_directory": null
+        },
+        "options": [],
+        "model_formats": ["unknown"],
+        "models": [{"path": verbatim_model, "name": "Synthetic model"}],
+        "artifacts": [conn_path.to_string_lossy(), verbatim_engine],
+        "health_path": "/health",
+        "health_authenticated": false
+    }))
+    .unwrap();
+    let hash_file = |path: &str| format!("{:x}", Sha256::digest(fs::read(path).unwrap()));
+    let mut artifacts_sha256 = serde_json::Map::new();
+    for artifact in &manifest.artifacts {
+        artifacts_sha256.insert(artifact.clone(), json!(hash_file(artifact)));
+    }
+    fs::write(
+        conn_dir.join("registration.json"),
+        serde_json::to_vec(&json!({
+            "manifest": manifest,
+            "executable_sha256": hash_file(&manifest.launch.program),
+            "probe_sha256": hash_file(&manifest.probe.program),
+            "artifacts_sha256": artifacts_sha256,
+            "probe": null,
+            "model_fingerprint": "",
+            "launch_fingerprint": "",
+            "error": null,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let clean_model = crate::verbatim_path::strip_windows_verbatim_prefix(model)
+        .to_string_lossy()
+        .into_owned();
+    let cfg = AppConfig {
+        active_provider: engine_id.as_str().into(),
+        active_runtime: runtime_id.clone(),
+        active_model: clean_model.clone(),
+        port: 43210,
+        ..AppConfig::default()
+    };
+    let captured = capture_engine_args(&root, &cfg)
+        .unwrap()
+        .expect("automatic managed manifest produces engine_args");
+    assert!(
+        captured
+            .iter()
+            .all(|arg| !arg.contains(r"\\?\") && !arg.contains('?')),
+        "{captured:?}"
+    );
+    assert!(
+        captured
+            .windows(2)
+            .any(|w| w == ["--model", clean_model.as_str()]),
+        "{captured:?}"
+    );
+    // The helper gives the engine its own internal port, so the benchmark's
+    // front port must not be recorded as the engine's port.
+    assert!(
+        captured.contains(&"--port={port}".to_owned()),
+        "{captured:?}"
+    );
+    assert!(
+        captured.iter().all(|arg| !arg.contains("43210")),
+        "{captured:?}"
+    );
+    assert!(
+        captured.contains(&"--host=127.0.0.1".to_owned()),
+        "{captured:?}"
+    );
+
+    let non_auto: crate::providers::registry::RuntimeManifest = serde_json::from_value(json!({
+        "schema_version": 1,
+        "adapter_version": 1,
+        "engine_id": "custom.manual-bench",
+        "runtime_id": "build-1",
+        "display_name": "Synthetic manual bench",
+        "platforms": [{"os": std::env::consts::OS, "arch": std::env::consts::ARCH}],
+        "protocol": "openai-v1",
+        "probe": {"program": "/bin/sh", "args": [], "env": {}},
+        "launch": {"program": "/bin/sh", "args": ["{model}", "{port}"], "env": {}},
+        "options": [],
+        "model_formats": ["unknown"],
+        "models": [],
+        "artifacts": [],
+        "health_path": "/health",
+        "health_authenticated": false
+    }))
+    .unwrap();
+    assert!(capture_engine_args_for_manifest(&root, &cfg, &non_auto)
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn engine_capture_failure_is_recorded_and_warned_without_failing_the_run() {
+    let request = PerformanceBenchRequest {
+        run_id: "capture-failure".into(),
+        method: ServingMethod {
+            id: "openai-chat-serving".into(),
+            version: METHOD_VERSION,
+        },
+        context_profile: "novel_en".into(),
+        prompt_bytes: vec![256],
+        max_output_tokens: 128,
+        concurrencies: vec![1],
+        repetitions: 1,
+        warmup: false,
+        request_usage: true,
+    };
+    let mut result = failed(&request, &AppConfig::default(), String::new());
+    result.engine_args = Some(vec!["/synthetic/stale".into()]);
+    let warning = record_engine_args(
+        &mut result,
+        Err(AppError::validation("synthetic capture failure")),
+    )
+    .expect("a capture failure is reported");
+    assert!(warning.contains("synthetic capture failure"), "{warning}");
+    assert!(warning.contains("measurement continues"), "{warning}");
+    assert_eq!(result.engine_args, None);
+    assert_eq!(
+        result.engine_args_error.as_deref(),
+        Some("synthetic capture failure")
+    );
+    let serialized = serde_json::to_value(&result).unwrap();
+    assert_eq!(serialized["engine_args_error"], "synthetic capture failure");
+    assert!(serialized.get("engine_args").is_none());
+
+    assert!(record_engine_args(&mut result, Ok(Some(vec!["/synthetic/engine".into()]))).is_none());
+    assert_eq!(result.engine_args, Some(vec!["/synthetic/engine".into()]));
+    assert_eq!(result.engine_args_error, None);
+    assert!(serde_json::to_value(&result)
+        .unwrap()
+        .get("engine_args_error")
+        .is_none());
+
+    assert!(record_engine_args(&mut result, Ok(None)).is_none());
+    assert_eq!(result.engine_args, None);
+    assert_eq!(result.engine_args_error, None);
+
+    // Built-in engines run their own command; there is nothing to capture.
+    let root = std::env::temp_dir().join(format!("aiolm-bench-builtin-{}", uuid::Uuid::new_v4()));
+    assert!(capture_engine_args(&root, &AppConfig::default())
+        .unwrap()
+        .is_none());
+}

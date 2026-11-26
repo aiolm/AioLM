@@ -1,5 +1,5 @@
 import { invoke, listen, type UnlistenFn } from './transport.ts';
-import { modelDisplayName } from '../lib/displayPaths.ts';
+import { modelDisplayName, normalizeDisplayText, stripModelShardSuffix } from '../lib/displayPaths.ts';
 import type { AppConfig, GgufModel } from './types.ts';
 import type { CommandSyntax } from './runtimeHelp.ts';
 import type { ServingRuntimeIdentity, ServingExecution } from '@aiolm/benchmark-contracts';
@@ -138,7 +138,11 @@ export interface SnapshotDisplayName { name: string; selected: boolean }
 /** Snapshot labels read only naming metadata, never every weight header. */
 export const snapshotModelName = (path: string) => invoke<SnapshotDisplayName | null>('snapshot_model_name', { path });
 export const modelCompatibility = (cfg: AppConfig) => invoke<ModelCompatibility>('model_compatibility', { cfg });
-export const providerCommandPreview = (cfg: AppConfig) => invoke<string[]>('provider_command_preview', { cfg });
+/** `argv` is what AioLM runs; `engine_argv` the engine's own command when AioLM
+ * starts the engine through a helper; `launch_blocked` says why launch would
+ * still refuse the shown command. */
+export type CommandPreview = { argv: string[]; engine_argv?: string[]; launch_blocked?: string };
+export const providerCommandPreview = (cfg: AppConfig) => invoke<CommandPreview>('provider_command_preview', { cfg });
 export const providerOptionIssues = (cfg: AppConfig) => invoke<Array<{ key: string; code: string; message: string }>>('provider_option_issues', { cfg });
 export interface ImportedProviderCommand {
   model?: string;
@@ -173,7 +177,8 @@ export async function listModelArtifacts(modelsDir: string, scanId?: string, sel
     // The catalog name is display-only, so a split GGUF is named once, without
     // its `-00001-of-00004` part suffix, on every screen that lists it.
     return {
-      name: modelDisplayName(artifact.selected_file ? artifact.name : repositoryName ?? artifact.name), path: artifact.path, size_mb: artifact.size_bytes / 1024 / 1024,
+      name: artifact.selected_file ? stripModelShardSuffix(normalizeDisplayText(artifact.name)) : modelDisplayName(repositoryName ?? artifact.name),
+      path: artifact.path, size_mb: artifact.size_bytes / 1024 / 1024,
       is_vision: artifact.role === 'projector', artifact, compatibility, ...(shards ? { shards } : {}),
     };
   });

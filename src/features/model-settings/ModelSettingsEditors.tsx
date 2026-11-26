@@ -1,5 +1,5 @@
 import * as api from '../../shared/api';
-import { modelDisplayName, normalizeDisplayPath, normalizeDisplayText, restoreDisplayPath } from '../../shared/lib/displayPaths';
+import { formatModelLabel, modelDisplayName, normalizeDisplayPath, normalizeDisplayText, restoreDisplayPath } from '../../shared/lib/displayPaths';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import ModelBadges from '../../shared/ui/ModelBadges';
@@ -16,7 +16,7 @@ import type { ModelSettingsDialogController } from './useModelSettingsDialogCont
 export default function ModelSettingsEditors({ controller }: { controller: ModelSettingsDialogController }) {
   const { onManageRuntimes, copy, help, profileCopy, id, cfg, provider, llama, external, latest, section, setError, setProviderOptionsPending, editorRevision, resourceError, setResourceRevision, runtime, catalog, contextLimit, disabled, benchmark, profiles, manageRuntimes, setFieldInvalid, change, device, editorKey } = controller;
   const sidecar = (key: 'mmproj' | 'spec_draft_model', label: string, vision: boolean) => <TuningOptionsContext.Provider value={runtime}><label><TuningOptionLabel id={`${id}-${key}-label`} fieldKey={key} label={label} />
-    <CustomSelect ariaLabelledBy={`${id}-${key}-label`} ariaDescribedBy={`${id}-${key}-help`} value={cfg[key]} disabled={disabled} onInputChange={value => change({ [key]: restoreDisplayPath(cfg[key], value) })} options={[{ value: '', label: copy.none }, ...catalog.models.filter(model => model.is_vision === vision && (model.artifact ? model.artifact.format === 'gguf' : /\.(gguf|mmproj)$/i.test(model.path))).map(model => ({ value: model.path, label: normalizeDisplayText(model.name), icon: <ModelIcon model={model.name} />, disabled: !!model.shards?.missing.length })),
+    <CustomSelect ariaLabelledBy={`${id}-${key}-label`} ariaDescribedBy={`${id}-${key}-help`} value={cfg[key]} disabled={disabled} onInputChange={value => change({ [key]: restoreDisplayPath(cfg[key], value) })} options={[{ value: '', label: copy.none }, ...catalog.models.filter(model => model.is_vision === vision && (model.artifact ? model.artifact.format === 'gguf' : /\.(gguf|mmproj)$/i.test(model.path))).map(model => ({ value: model.path, label: formatModelLabel(model.name), icon: <ModelIcon model={model.name} />, disabled: !!model.shards?.missing.length })),
       ...(cfg[key] && !catalog.models.some(model => model.path === cfg[key]) ? [{ value: cfg[key], label: modelDisplayName(cfg[key]), icon: <ModelIcon model={cfg[key]} /> }] : [])]} onChange={value => change({ [key]: value })} placeholder={copy.path} />
     <span id={`${id}-${key}-help`} className="app-section-hint">{vision ? help.projector : help.draftModel}</span>
   </label></TuningOptionsContext.Provider>;

@@ -18,6 +18,7 @@ function serving(rows: PerformanceBenchmarkRow[]): ServingPerformanceBenchmarkRe
   record.request.repetitions = 3;
   record.result.rows = rows;
   record.result.args = ['--threads', '8', '--credential', 'PRIVATE-TOKEN'];
+  record.result.engine_args = ['/private/engine', '--credential', 'PRIVATE-ENGINE-TOKEN'];
   const provenance = defined(record.result.provenance);
   provenance.app_version = '0.3.5';
   provenance.recorded_model_label = 'Recorded-label';
@@ -181,5 +182,13 @@ describe('benchmark report exports', () => {
     }
     expect(report.columns.some(column => column.key?.startsWith('reported_prompt_tokens'))).toBe(false);
     expect(report.columns.some(column => column.key?.startsWith('reported_completion_tokens'))).toBe(false);
+  });
+
+  it('preserves selected snapshot labels in report exports while dropping local paths and shard suffixes', () => {
+    const saved = serving([trial()]);
+    defined(saved.result.provenance).recorded_model_label = 'variants · 4bit/model-0001-of-0004.safetensors';
+    const report = benchmarkReport([saved]);
+    const labelIndex = report.columns.findIndex(column => column.key === 'recorded_model_label');
+    expect(defined(report.rows[0])[labelIndex]).toBe('variants · 4bit/model.safetensors');
   });
 });

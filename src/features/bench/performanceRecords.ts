@@ -84,6 +84,8 @@ function isServingRecord(value: Record<string, unknown>, request: Record<string,
     || !['complete', 'partial', 'cancelled', 'failed'].includes(result.status as string)
     || (result.message != null && typeof result.message !== 'string')
     || !Array.isArray(result.args) || !result.args.every(arg => typeof arg === 'string')
+    || (result.engine_args !== undefined && (!Array.isArray(result.engine_args) || !result.engine_args.every(arg => typeof arg === 'string')))
+    || (result.engine_args_error !== undefined && typeof result.engine_args_error !== 'string')
     || !Array.isArray(result.rows) || result.rows.length > 10000 || !result.rows.every(isServingRow)) return false;
   const p = result.provenance;
   // A launch failure can be journaled before any provenance or observations exist.
@@ -162,7 +164,9 @@ export function recordedBenchmarkModelLabel(record: PerformanceBenchmarkRecord):
 
 /** UI-only fallback from the run's saved local selection, not current model files or metadata. */
 export function benchmarkHistoryModelLabel(record: PerformanceBenchmarkRecord): string {
-  return normalizeDisplayText(recordedBenchmarkModelLabel(record) || modelDisplayName(record.model));
+  // Records frozen before part suffixes were grouped still carry the first part's name.
+  const recorded = recordedBenchmarkModelLabel(record);
+  return normalizeDisplayText(modelDisplayName(recorded || record.model));
 }
 
 export function readPerformanceHistory(): PerformanceBenchmarkRecord[] {

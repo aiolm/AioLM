@@ -30,60 +30,32 @@ pub struct ModelShards {
     pub missing: Vec<usize>,
 }
 
-// GGUF's standard suffix is -00001-of-00033.gguf. Include the directory,
-// quantization/base name and total in the key; similarly named models elsewhere
-// and different quantizations must remain independent entries.
-pub(crate) fn shard_name(name: &str) -> Option<(&str, usize, usize)> {
-    let (stem, extension) = name.rsplit_once('.')?;
-    if !extension.eq_ignore_ascii_case("gguf") {
-        return None;
-    }
-    let (prefix, total) = stem.rsplit_once("-of-")?;
-    let (base, index) = prefix.rsplit_once('-')?;
-    if base.is_empty()
-        || index.len() != 5
-        || total.len() != 5
-        || !index.bytes().all(|byte| byte.is_ascii_digit())
-        || !total.bytes().all(|byte| byte.is_ascii_digit())
-    {
-        return None;
-    }
-    let index: usize = index.parse().ok()?;
-    let total: usize = total.parse().ok()?;
-    (total > 1 && index > 0 && index <= total).then_some((base, index, total))
-}
+// GGUF's standard suffix is -00001-of-00033.gguf (four-digit parts are also
+// recognised). Include the directory, quantization/base name and total in the
+// key; similarly named models elsewhere and different quantizations must
+// remain independent entries.
 
 /// The display name of a split GGUF model: the first shard's name without
 /// its `-00001-of-00004` part. Other names are returned unchanged.
 pub(crate) fn grouped_shard_name(name: &str) -> String {
-    match shard_name(name) {
-        Some((base, _, _)) => {
-            let extension = name.rsplit_once('.').map_or("gguf", |(_, ext)| ext);
-            format!("{base}.{extension}")
-        }
-        None => name.to_owned(),
-    }
+    crate::model_names::strip_shard_suffix(name)
 }
 
 pub(crate) fn validate_model_shards(path: &Path) -> Result<(), AppError> {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return Ok(());
     };
-    let Some((base, index, total)) = shard_name(name) else {
+    let Some(parts) = crate::model_names::parse_gguf_shard(name) else {
         return Ok(());
     };
-    if index != 1 {
+    if parts.index != 1 {
         return Err(AppError::validation(
             "select the first GGUF shard before starting the model",
         ));
     }
     let parent = path.parent().unwrap_or(Path::new(""));
-    let extension = path
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or("gguf");
-    for index in 1..=total {
-        let shard = parent.join(format!("{base}-{index:05}-of-{total:05}.{extension}"));
+    for index in 1..=parts.total {
+        let shard = parent.join(parts.format_part(index));
         if !shard.is_file() {
             return Err(AppError::not_found(format!(
                 "model shard is missing: {}",
@@ -97,23 +69,25 @@ pub(crate) fn validate_model_shards(path: &Path) -> Result<(), AppError> {
 fn group_shards(files: Vec<GgufModel>, cancel: &AtomicBool) -> Result<Vec<GgufModel>, AppError> {
     check_cancelled(cancel)?;
     let mut models = Vec::new();
-    let mut groups = BTreeMap::<(PathBuf, String, usize), Vec<(usize, GgufModel)>>::new();
+    let mut groups = BTreeMap::<(PathBuf, String, usize, usize), Vec<(usize, GgufModel)>>::new();
     for file in files {
         check_cancelled(cancel)?;
-        if let Some((base, index, total)) = shard_name(&file.name) {
+        if let Some(shard) = crate::model_names::parse_gguf_shard(&file.name) {
             let parent = Path::new(&file.path)
                 .parent()
                 .unwrap_or(Path::new(""))
                 .to_path_buf();
+            // The width keeps a four-digit set and a five-digit set of the
+            // same base independent.
             groups
-                .entry((parent, base.to_owned(), total))
+                .entry((parent, shard.base.to_owned(), shard.total, shard.width))
                 .or_default()
-                .push((index, file));
+                .push((shard.index, file));
         } else {
             models.push(file);
         }
     }
-    for ((_, _, total), mut parts) in groups {
+    for ((_, _, total, _), mut parts) in groups {
         check_cancelled(cancel)?;
         parts.sort_by_key(|(index, _)| *index);
         check_cancelled(cancel)?;
@@ -300,7 +274,9 @@ fn walk(
             .unwrap_or_default();
         models.push(GgufModel {
             name: name.clone(),
-            path: path.to_string_lossy().into_owned(),
+            path: crate::verbatim_path::strip_windows_verbatim_prefix(path)
+                .to_string_lossy()
+                .into_owned(),
             size_mb: metadata.len() as f64 / 1_048_576.0,
             is_vision: name.to_ascii_lowercase().contains("mmproj"),
             shards: None,
@@ -383,6 +359,49 @@ mod tests {
     }
 
     #[test]
+    fn four_digit_parts_group_and_stay_apart_from_five_digit_sets() {
+        let result = group_shards(
+            vec![
+                fixture("a-0002-of-0002.gguf", "models", 2.0),
+                fixture("a-0001-of-0002.gguf", "models", 1.0),
+                fixture("a-00001-of-00002.gguf", "models", 4.0),
+            ],
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(result.len(), 2);
+        let four = result
+            .iter()
+            .find(|model| model.path.ends_with("a-0001-of-0002.gguf"))
+            .unwrap();
+        assert_eq!(four.name, "a.gguf");
+        assert_eq!(four.size_mb, 3.0);
+        assert!(four.shards.as_ref().unwrap().missing.is_empty());
+        let five = result
+            .iter()
+            .find(|model| model.path.ends_with("a-00001-of-00002.gguf"))
+            .unwrap();
+        assert_eq!(five.name, "a.gguf");
+        assert_eq!(five.shards.as_ref().unwrap().missing, vec![2]);
+    }
+
+    #[test]
+    fn four_digit_first_shards_validate_their_siblings() {
+        let root = std::env::temp_dir().join(format!("aiolm-four-digit-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("m-0001-of-0002.gguf"), b"x").unwrap();
+        let first = root.join("m-0001-of-0002.gguf");
+        assert!(validate_model_shards(&first)
+            .unwrap_err()
+            .message
+            .contains("m-0002-of-0002.gguf"));
+        fs::write(root.join("m-0002-of-0002.gguf"), b"x").unwrap();
+        validate_model_shards(&first).unwrap();
+        assert!(validate_model_shards(&root.join("m-0002-of-0002.gguf")).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn grouping_keeps_folders_quantizations_totals_and_sidecars_separate() {
         let mut files = Vec::new();
         for (dir, base, total) in [
@@ -421,9 +440,13 @@ mod tests {
             "a-00001-of-00002.gguf.part",
             "a-00001-of-0000x.gguf",
         ] {
-            assert!(shard_name(name).is_none(), "{name}");
+            assert!(
+                crate::model_names::parse_gguf_shard(name).is_none(),
+                "{name}"
+            );
         }
-        assert_eq!(shard_name("a-00001-of-00002.GGUF"), Some(("a", 1, 2)));
+        let parsed = crate::model_names::parse_gguf_shard("a-00001-of-00002.GGUF").unwrap();
+        assert_eq!((parsed.base, parsed.index, parsed.total), ("a", 1, 2));
     }
 
     #[test]
@@ -629,10 +652,13 @@ mod grouping_cancellation_tests {
         let observation = Observation::install(move |event| delivered.borrow_mut().push(event));
         let result =
             scan_cancellable(&fixture.root.to_string_lossy(), &AtomicBool::new(false)).unwrap();
+        let expected_file =
+            crate::verbatim_path::strip_windows_verbatim_prefix(fixture.file.clone());
+        let expected_path = expected_file.to_string_lossy();
         let expected = serde_json::json!({
-            "models": [{"name":"model.gguf", "path":fixture.file.to_string_lossy(),
+            "models": [{"name":"model.gguf", "path":expected_path,
                 "size_mb":CONTENT.len() as f64 / 1_048_576.0, "is_vision":false,
-                "shards":{"files":[fixture.file.to_string_lossy()],"total":32,"missing":(2..=32).collect::<Vec<_>>()}}],
+                "shards":{"files":[expected_path],"total":32,"missing":(2..=32).collect::<Vec<_>>()}}],
             "truncated":false,
         });
         assert_eq!(serde_json::to_value(&result).unwrap(), expected);
@@ -646,5 +672,32 @@ mod grouping_cancellation_tests {
             "dropped observer receives no later work"
         );
         assert_eq!(fs::read(&fixture.file).unwrap(), CONTENT);
+    }
+
+    #[test]
+    fn scan_strips_windows_verbatim_prefixes_for_unicode_and_sidecar_models() {
+        let root =
+            std::env::temp_dir().join(format!("aiolm-scan-unicode-{}", uuid::Uuid::new_v4()));
+        let nested = root.join("한글 모델 dir").join("sub folder");
+        fs::create_dir_all(&nested).unwrap();
+        for file in [
+            "primary-model.gguf",
+            "mmproj-vision.gguf",
+            "draft-mtp-model.gguf",
+        ] {
+            fs::write(nested.join(file), b"synthetic gguf bytes").unwrap();
+        }
+        let scanned = scan(&root.to_string_lossy()).unwrap();
+        let _ = fs::remove_dir_all(&root);
+        assert_eq!(scanned.models.len(), 3);
+        for model in &scanned.models {
+            assert!(
+                !model.path.starts_with(r"\\?\") && !model.path.contains('?'),
+                "unexpected verbatim prefix or '?' in scanned model path: {}",
+                model.path
+            );
+            assert!(model.path.contains("한글 모델 dir"));
+            assert!(model.path.contains("sub folder"));
+        }
     }
 }

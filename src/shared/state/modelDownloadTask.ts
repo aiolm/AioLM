@@ -1,5 +1,6 @@
 import { useEffect, useSyncExternalStore } from "react";
 import * as api from "../api/index";
+import { formatModelLabel } from "../lib/displayPaths";
 import { appendDownloadSample, estimateDownloadSpeed, type DownloadSample } from "../lib/transfer";
 import {
   finishTask,
@@ -52,7 +53,7 @@ function downloadTaskPatch(
 ): Partial<Omit<AppTask, "id">> {
   const estimated = next.phase === "downloading" ? estimateDownloadSpeed(samples) : null;
   return {
-    label: existing?.label || next.file_path || next.repo_id,
+    label: formatModelLabel(existing?.label || next.file_path || next.repo_id),
     ...(existing ? {} : { repoId: next.repo_id, filePath: next.file_path }),
     phase: next.phase,
     received: next.received,
@@ -106,7 +107,7 @@ export function useModelDownloadTask(): void {
           registerTask({
             id: taskId,
             kind: "model-download",
-            label: next.file_path || next.repo_id,
+            label: formatModelLabel(next.file_path || next.repo_id),
             interruptible: true,
             pausable: true,
             cancel: () => api.hfCancelDownload(rawId),

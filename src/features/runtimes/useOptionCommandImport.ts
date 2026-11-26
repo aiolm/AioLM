@@ -3,7 +3,9 @@ import { runtimeHelpImport, type ImportedPlan, type OptionSchema } from '../../s
 import { runtimeOptionsCopy } from '../../shared/i18n/runtimeOptionsCopy';
 import { JsonOptionNumberError } from '../../shared/runtime/jsonOptionNumbers';
 import { applyPlan, ImportedIntegerPrecisionError } from './optionOrder';
-import { maskImportReview } from './optionPresentation';
+import { maskImportReview, withoutSecretPlaceholders } from './optionPresentation';
+import { detectCommandSyntax, hostCommandLineSyntax } from '../../shared/lib/commandLine';
+import { errorMessage } from '../../shared/api/errors';
 import type { RuntimeOptionSchemaFormProps } from './RuntimeOptionSchemaForm';
 
 interface ImportRequestOwner { schema: OptionSchema; scopeKey: string; text: string }
@@ -41,19 +43,22 @@ export function useOptionCommandImport({ schema, scope, values, onChange, readOn
     const request = { schema, scopeKey, text: paste };
     activeImport.current = request;
     setAcceptedImport(null); setFailedImport(null);
-    void runtimeHelpImport(schema, scope, paste)
+    // The paste's own syntax when it shows one, else the user's shell (the copy format).
+    void runtimeHelpImport(schema, scope, paste, detectCommandSyntax(paste) ?? hostCommandLineSyntax())
       .then(result => { if (ownsImport(request)) setAcceptedImport({ request, result }); })
       .catch(cause => {
         if (!ownsImport(request)) return;
-        setAcceptedImport(null); setFailedImport({ request, message: cause instanceof Error ? cause.message : String(cause) });
+        setAcceptedImport(null); setFailedImport({ request, message: errorMessage(cause) });
       });
   };
   const applyImport = () => {
     if (!acceptedImport || !ownsImport(acceptedImport.request)) return;
-    const plan = readOnlyForOption ? acceptedImport.result.plan.filter(item => {
+    // A pasted copy of a masked preview keeps the saved secrets.
+    const unmasked = withoutSecretPlaceholders(acceptedImport.result.plan).plan;
+    const plan = readOnlyForOption ? unmasked.filter(item => {
       const option = schema.options.find(option => option.key === item.key);
       return !option || !readOnlyForOption(option);
-    }) : acceptedImport.result.plan;
+    }) : unmasked;
     try { onChange(applyPlan(schema, values, { plan })); } catch (cause) { setFailedImport({ request: acceptedImport.request, message: cause instanceof ImportedIntegerPrecisionError ? copy.importIntegerPrecision : cause instanceof JsonOptionNumberError ? copy.jsonNumberRange : cause instanceof Error ? cause.message : String(cause) }); }
   };
   return { paste, imported, reviewedImport, importError, changePaste, readCommand, applyImport };

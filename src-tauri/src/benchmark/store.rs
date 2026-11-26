@@ -66,6 +66,12 @@ fn metadata(result: &PerformanceBenchResult) -> Value {
         "run_id": result.run_id, "status": result.status, "message": result.message,
         "args": result.args,
     });
+    if let Some(engine_args) = &result.engine_args {
+        value["engine_args"] = json!(engine_args);
+    }
+    if let Some(error) = &result.engine_args_error {
+        value["engine_args_error"] = json!(error);
+    }
     if let Some(provenance) = &result.provenance {
         value["provenance"] = json!(provenance);
     }
@@ -110,6 +116,13 @@ fn validate_serving_record(record: &Value) -> Result<(), String> {
             .pointer("/result/args")
             .and_then(Value::as_array)
             .is_some_and(|args| args.iter().all(Value::is_string))
+        || !record.pointer("/result/engine_args").is_none_or(|args| {
+            args.as_array()
+                .is_some_and(|items| items.iter().all(Value::is_string))
+        })
+        || !record
+            .pointer("/result/engine_args_error")
+            .is_none_or(Value::is_string)
         || record
             .pointer("/result/message")
             .is_some_and(|v| !v.is_null() && !v.is_string())
@@ -872,6 +885,11 @@ mod tests {
         let journal = RunJournal::begin(&root, initial).unwrap();
         let mut result = serving_result("durable");
         result.args = vec!["--threads".into(), "8".into()];
+        result.engine_args = Some(vec![
+            r"C:\synthetic\engine.exe".into(),
+            "--threads".into(),
+            "8".into(),
+        ]);
         journal.checkpoint(&result).unwrap();
         result.rows.push(serving_row());
         journal.checkpoint(&result).unwrap();
@@ -880,6 +898,10 @@ mod tests {
         assert_eq!(recovered["result"]["rows"].as_array().unwrap().len(), 1);
         assert_eq!(recovered["result"]["status"], "partial");
         assert_eq!(recovered["result"]["args"][1], "8");
+        assert_eq!(
+            recovered["result"]["engine_args"],
+            json!([r"C:\synthetic\engine.exe", "--threads", "8"])
+        );
         result.status = "complete";
         result.message = None;
         journal.finish(&result).unwrap();
@@ -894,8 +916,67 @@ mod tests {
         );
         assert_eq!(reopened.records[0]["result"]["status"], "complete");
         assert_eq!(
+            reopened.records[0]["result"]["engine_args"],
+            json!([r"C:\synthetic\engine.exe", "--threads", "8"])
+        );
+        assert_eq!(
             reopened.records[0]["result"]["provenance"]["schema_version"],
             3
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn engine_args_validation_allows_absence_and_rejects_non_string_tokens() {
+        let legacy = serving_record("legacy-without-engine-args", 10);
+        assert!(legacy["result"].get("engine_args").is_none());
+        validate_record(&legacy).unwrap();
+
+        let mut valid_with_engine_args = legacy.clone();
+        valid_with_engine_args["result"]["engine_args"] =
+            json!(["/synthetic/engine", "--threads", "8"]);
+        validate_record(&valid_with_engine_args).unwrap();
+
+        let mut bad_type = legacy.clone();
+        bad_type["result"]["engine_args"] = json!("not-an-array");
+        assert!(validate_record(&bad_type).is_err());
+
+        let mut bad_element = legacy.clone();
+        bad_element["result"]["engine_args"] = json!(["/synthetic/engine", 8]);
+        assert!(validate_record(&bad_element).is_err());
+
+        let mut capture_failed = legacy.clone();
+        capture_failed["result"]["engine_args_error"] = json!("synthetic capture failure");
+        validate_record(&capture_failed).unwrap();
+
+        let mut bad_error = legacy;
+        bad_error["result"]["engine_args_error"] = json!(["not", "a", "string"]);
+        assert!(validate_record(&bad_error).is_err());
+    }
+
+    #[test]
+    fn engine_capture_failure_reason_survives_checkpoint_and_finish() {
+        let root = root();
+        let journal = RunJournal::begin(&root, serving_record("capture-failed", 10)).unwrap();
+        let mut result = serving_result("capture-failed");
+        result.args = vec!["/synthetic/aiolm".into(), "--internal-runtime-auto".into()];
+        result.engine_args_error = Some("synthetic capture failure".into());
+        result.rows.push(serving_row());
+        journal.checkpoint(&result).unwrap();
+        let recovered = replay(&journal.path).unwrap();
+        assert!(recovered["result"].get("engine_args").is_none());
+        assert_eq!(
+            recovered["result"]["engine_args_error"],
+            "synthetic capture failure"
+        );
+        result.status = "complete";
+        result.message = None;
+        journal.finish(&result).unwrap();
+        drop(journal);
+        let reopened = list(&root, 0, 20).unwrap();
+        assert_eq!(
+            reopened.records[0]["result"]["engine_args_error"],
+            "synthetic capture failure"
         );
         fs::remove_dir_all(root).unwrap();
     }

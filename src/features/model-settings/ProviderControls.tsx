@@ -13,7 +13,7 @@ import { inNumericRange, type ConfirmedSyntax, type EffectiveSchema, type Option
 import RuntimeOptionSchemaForm from '../runtimes/RuntimeOptionSchemaForm';
 import { OccurrenceOrder } from '../runtimes/OccurrenceOrder';
 import { SchemaOptionField } from '../runtimes/SchemaOptionField';
-import { maskPreview, maskImportReview } from '../runtimes/optionPresentation';
+import { isSecretPlaceholder, maskPreview, maskImportReview, withoutSecretPlaceholders } from '../runtimes/optionPresentation';
 import { sensitiveEntryTokenStrings } from '../runtimes/sensitiveEntryTokens';
 import RuntimeHelpReview from '../runtimes/RuntimeHelpReview';
 import RuntimeFactDifferences from '../runtimes/RuntimeFactDifferences';
@@ -30,6 +30,11 @@ import { profileSchemaCopy } from './profileSchemaCopy';
 import { runtimeInstanceLabel } from '../../shared/i18n/runtimeInstanceText';
 import RuntimeArgumentList from '../runtimes/RuntimeArgumentList';
 import { rawArgumentsCopy } from './rawArgumentsCopy';
+import { commandToolsCopy } from './commandToolsCopy';
+import { errorMessage } from '../../shared/api/errors';
+import { detectCommandSyntax, hostCommandLineSyntax } from '../../shared/lib/commandLine';
+import CommandLineViewer from '../../shared/ui/CommandLineViewer';
+
 
 export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, onReady, revision = 0, autoSelect = true }: {
   cfg: api.AppConfig; disabled: boolean; onProvider: (provider: api.ProviderId) => void;
@@ -50,7 +55,7 @@ export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, on
     setInventoryState('loading'); setError('');
     void Promise.all([api.providerCatalog(inventoryRevision > 0 || retryRevision > 0), api.providerRuntimes()]).then(([catalog, runtimes]) => {
       if (active) { setDescriptions(catalog); setRuntimes(runtimes); setInventoryState('ready'); }
-    }).catch(cause => { if (active) { setError(String(cause)); setInventoryState('error'); } });
+    }).catch(cause => { if (active) { setError(errorMessage(cause)); setInventoryState('error'); } });
     return () => { active = false; };
   }, [revision, inventoryRevision, retryRevision]);
   const selected = provider === 'llama.cpp' ? cfg.active_build && cfg.active_backend ? `${cfg.active_build}-${cfg.active_backend}` : '' : cfg.active_runtime ?? '';
@@ -144,27 +149,35 @@ export function ProviderOptions({ cfg, disabled, benchmark = false, onChange, on
   const [issues, setIssues] = useState<Array<{ key: string; message: string }>>([]);
   const issueId = useId();
   const rawArgumentsHintId = useId();
+  const importHintId = useId();
   const issueDescriptions = useMemo(() => {
     const descriptions = new Map<string, string>();
     issues.forEach((issue, index) => descriptions.set(issue.key, [descriptions.get(issue.key), `${issueId}-${index}`].filter(Boolean).join(' ')));
     return descriptions;
   }, [issues, issueId]);
   const [validating, setValidating] = useState(true);
-  const [error, setError] = useState(''); const [paste, setPaste] = useState(''); const [preview, setPreview] = useState('');
+  const [error, setError] = useState(''); const [paste, setPaste] = useState(''); const [preview, setPreview] = useState<{ argv: string[]; engineArgv?: string[]; blocked?: string } | null>(null);
   // Words a registered import ignored. Kept apart from `error`: revalidating
   // the applied configuration must not erase why they were not applied.
   const [importReview, setImportReview] = useState('');
-  const [importSyntax, setImportSyntax] = useState<api.CommandSyntax | ''>('');
+  const [importSyntax, setImportSyntax] = useState<api.CommandSyntax | ''>(hostCommandLineSyntax);
+  // The syntax a paste's line continuations chose, shown until the user picks one.
+  const [detectedSyntax, setDetectedSyntax] = useState<api.CommandSyntax | null>(null);
+  const syntaxChosen = useRef(false);
+  const [copySyntax, setCopySyntax] = useState<api.CommandSyntax>(hostCommandLineSyntax);
+  // Which command the preview shows when AioLM starts the engine through a helper.
+  const [commandKind, setCommandKind] = useState<'engine' | 'aiolm'>('engine');
+  const [multiline, setMultiline] = useState(true);
   // A preview can fail for launch-time reasons (a model awaiting its fresh
   // probe) while the options are valid; it informs but does not gate saving.
   const [previewError, setPreviewError] = useState('');
-  useEffect(() => { setPreview(''); setPreviewError(''); }, [cfg]);
+  useEffect(() => { setPreview(null); setPreviewError(''); }, [cfg]);
   // Unsaved draft secret prefix indices reported by the positional layout
   // sibling (display-only, never persisted). Projections generated before the
   // linkage are cleared so no rendered copy keeps the raw secret.
   const [draftSecretIndices, setDraftSecretIndices] = useState<number[]>([]);
   const draftSecretsKey = JSON.stringify([...draftSecretIndices].sort((a, b) => a - b));
-  useEffect(() => { setPreview(''); setPreviewError(''); setImportReview(''); }, [draftSecretsKey]);
+  useEffect(() => { setPreview(null); setPreviewError(''); setImportReview(''); }, [draftSecretsKey]);
   // Saved (current/stale supplement) plus unsaved draft entry secrets for
   // display projections only. Draft indices resolve against this effective's
   // own prefix; out-of-range indices contribute nothing.
@@ -205,7 +218,7 @@ export function ProviderOptions({ cfg, disabled, benchmark = false, onChange, on
     if (runtimeNeeded) { setIssues([]); setValidating(false); return; }
     const timer = setTimeout(() => {
       void api.providerOptionIssues(cfg).then(result => { if (active) { setIssues(result); setValidating(false); } })
-        .catch(cause => { if (active) { setError(String(cause)); setValidating(false); } });
+        .catch(cause => { if (active) { setError(errorMessage(cause)); setValidating(false); } });
     }, 150);
     return () => { active = false; clearTimeout(timer); };
     // Saved confirmations change what the same values mean; revalidate.
@@ -227,7 +240,7 @@ export function ProviderOptions({ cfg, disabled, benchmark = false, onChange, on
         setSchemaKnown(true);
         setLoadingCatalog(false);
       }
-    }).catch(cause => { if (active) { setCatalogError(String(cause)); setLoadingCatalog(false); } });
+    }).catch(cause => { if (active) { setCatalogError(errorMessage(cause)); setLoadingCatalog(false); } });
     return () => { active = false; };
   }, [provider, external, cfg.active_runtime, cfg.active_backend, cfg.active_build, selectedRuntime, usesEffective, effectiveRevision]);
   // Until the schema answers, absence from this list is not evidence that a
@@ -262,6 +275,7 @@ export function ProviderOptions({ cfg, disabled, benchmark = false, onChange, on
     && (option.target === 'request' || !runtimeFlags || !effective?.compat_keys.includes(option.key)
       || option.spellings.some(spelling => runtimeFlags.includes(spelling.flag)) || values[option.key] !== undefined);
   const hasSchemaOptions = effective ? effective.schema.options.some(schemaFilter) : visible.length > 0;
+  const keptSecretsNotice = (keys: string[]) => keys.length ? `${commandToolsCopy[locale].secretsKept} ${keys.join(', ')}` : '';
   const importCommand = () => {
     if (!importSyntax) return;
     const source = cfg;
@@ -274,14 +288,16 @@ export function ProviderOptions({ cfg, disabled, benchmark = false, onChange, on
       void api.runtimeHelpImport(effective.schema, effective.scope, paste, importSyntax, effective.entry).then(result => {
         if (!current()) return;
         let next: Record<string, unknown>;
+        // A pasted copy of a masked preview must not overwrite saved secrets.
+        const { plan: unmasked, kept } = withoutSecretPlaceholders(result.plan);
         try {
-          const plan = benchmark ? result.plan.filter(item => effective.schema.options.find(option => option.key === item.key)?.target !== 'request') : result.plan;
+          const plan = benchmark ? unmasked.filter(item => effective.schema.options.find(option => option.key === item.key)?.target !== 'request') : unmasked;
           next = applyPlan(effective.schema, values, { plan });
-        } catch (cause) { setError(cause instanceof ImportedIntegerPrecisionError ? runtimeOptionsCopy[locale].importIntegerPrecision : cause instanceof JsonOptionNumberError ? runtimeOptionsCopy[locale].jsonNumberRange : String(cause)); return; }
+        } catch (cause) { setError(cause instanceof ImportedIntegerPrecisionError ? runtimeOptionsCopy[locale].importIntegerPrecision : cause instanceof JsonOptionNumberError ? runtimeOptionsCopy[locale].jsonNumberRange : errorMessage(cause)); return; }
         const review = maskImportReview(result, effective.schema, values, liveEntrySecrets(), effective.entry);
-        setError(''); setImportReview([...review.managed, ...review.unrecognized].join(' '));
+        setError(''); setImportReview([[...review.managed, ...review.unrecognized].join(' '), keptSecretsNotice(kept)].filter(Boolean).join(' · '));
         onChange({ provider_options: { ...cfg.provider_options, [provider]: next } });
-      }).catch(cause => { if (current()) setError(String(cause)); });
+      }).catch(cause => { if (current()) setError(errorMessage(cause)); });
       return;
     }
     void api.providerImportCommand(provider, paste, importSyntax).then(result => {
@@ -291,6 +307,16 @@ export function ProviderOptions({ cfg, disabled, benchmark = false, onChange, on
         if (option.kind.type === 'json') assertJsonOptionNumbers(result.options[option.key]);
       }
       const imported = { ...result.options };
+      // A pasted copy of a masked preview keeps the saved secret instead.
+      const kept = Object.keys(imported).filter(key => {
+        const value = imported[key];
+        return isSecretPlaceholder(value) || (Array.isArray(value) && value.some(isSecretPlaceholder));
+      });
+      for (const key of kept) {
+        if (values[key] === undefined) delete imported[key];
+        else imported[key] = values[key];
+      }
+      setImportReview(keptSecretsNotice(kept));
       if (benchmark) {
         for (const option of schema) {
           if (option.target !== 'request') continue;
@@ -299,7 +325,7 @@ export function ProviderOptions({ cfg, disabled, benchmark = false, onChange, on
         }
       }
       setError(''); onChange({ ...(result.model ? { active_model: result.model } : {}), provider_options: { ...cfg.provider_options, [provider]: imported } });
-    }).catch(cause => { if (current()) setError(cause instanceof JsonOptionNumberError ? runtimeOptionsCopy[locale].jsonNumberRange : String(cause)); });
+    }).catch(cause => { if (current()) setError(cause instanceof JsonOptionNumberError ? runtimeOptionsCopy[locale].jsonNumberRange : errorMessage(cause)); });
   };
   // Confirmations are runtime metadata pinned to the accepted help, saved
   // immediately and apart from the profile's values.
@@ -309,7 +335,7 @@ export function ProviderOptions({ cfg, disabled, benchmark = false, onChange, on
     void save().then(() => {
       if (syntaxRequest.current !== request) return;
       setError(''); setEffectiveRevision(current => current + 1); checkedSchema.retry();
-    }).catch(cause => { if (syntaxRequest.current === request) setError(String(cause)); })
+    }).catch(cause => { if (syntaxRequest.current === request) setError(errorMessage(cause)); })
       .finally(() => { if (syntaxRequest.current === request) setSyntaxBusy(false); });
   };
   const confirmable = effective?.help_state === 'current' && !!effective.accepted_fingerprint;
@@ -322,6 +348,76 @@ export function ProviderOptions({ cfg, disabled, benchmark = false, onChange, on
   const adapters = !section || section === 'adapters';
   const advanced = !section || section === 'advanced';
   const managedOptions = collapseTools ? effective?.schema.options.filter(option => option.managed && option.managed !== 'discovery') ?? [] : [];
+  const toolsCopy = commandToolsCopy[locale];
+  const syntaxOptions = [{ value: 'powershell' as const, label: commandImportCopy[locale].powershell },
+    { value: 'windows' as const, label: commandImportCopy[locale].windows }, { value: 'posix' as const, label: commandImportCopy[locale].posix }];
+  const commandTools = <div className="model-settings-command-tools">
+    {editor === 'schema' && <div className="model-settings-command-import">
+      <label className="model-settings-command-field">
+        <span className="model-settings-command-title">{copy.import}</span>
+        <textarea className="app-textarea font-mono" rows={3} disabled={disabled} value={paste}
+          placeholder={toolsCopy.placeholder} aria-describedby={importHintId} autoCorrect="off" autoCapitalize="off" spellCheck={false}
+          onChange={event => {
+            importRequest.current += 1;
+            const text = event.target.value;
+            setPaste(text);
+            if (!text.trim()) {
+              syntaxChosen.current = false;
+              setDetectedSyntax(null);
+            }
+            // Line continuations prove the syntax unless the user picked one.
+            const detected = syntaxChosen.current ? null : detectCommandSyntax(text);
+            if (detected && detected !== importSyntax) { setImportSyntax(detected); setDetectedSyntax(detected); }
+          }} />
+      </label>
+      <p id={importHintId} className="app-section-hint">{effective ? toolsCopy.importHint : toolsCopy.importHintBuiltin}</p>
+      <div className="model-settings-command-bar">
+        <label className="model-settings-command-select">
+          <span>{commandImportCopy[locale].syntax}</span>
+          <CustomSelect<api.CommandSyntax | ''> size="sm" ariaLabel={commandImportCopy[locale].syntax}
+            value={importSyntax} disabled={disabled}
+            options={[{ value: '', label: commandImportCopy[locale].choose }, ...syntaxOptions]}
+            onChange={value => { importRequest.current += 1; syntaxChosen.current = true; setImportSyntax(value); setDetectedSyntax(null); }} />
+        </label>
+        <button type="button" className="app-button app-button--secondary app-button--sm" disabled={disabled || !paste.trim() || !importSyntax} onClick={importCommand}>{copy.import}</button>
+      </div>
+      {detectedSyntax && detectedSyntax === importSyntax && <p role="status" className="app-section-hint">{toolsCopy.syntaxDetected} {commandImportCopy[locale][detectedSyntax]}</p>}
+    </div>}
+    <div className="model-settings-command-preview-section">
+      <div className="app-page-actions model-settings-command-preview-trigger">
+        <button type="button" className="app-button app-button--secondary app-button--sm" disabled={disabled || runtimeNeeded} onClick={() => {
+          const source = cfg;
+          const request = ++previewRequest.current;
+          const current = () => cfgRef.current === source && previewRequest.current === request;
+          void api.providerCommandPreview(source).then(result => {
+            if (!current()) return;
+            setPreviewError('');
+            const mask = (argv: string[]) => effective ? maskPreview(argv, effective.schema, values, liveEntrySecrets()) : argv;
+            setPreview({
+              argv: mask(result.argv),
+              engineArgv: result.engine_argv && mask(result.engine_argv),
+              blocked: result.launch_blocked,
+            });
+          }).catch(cause => { if (current()) { setPreview(null); setPreviewError(errorMessage(cause)); } });
+        }}>{copy.preview}</button>
+      </div>
+      {preview && (
+        <CommandLineViewer
+          argv={preview.argv}
+          engineArgv={preview.engineArgv}
+          blocked={preview.blocked}
+          labels={toolsCopy}
+          commandKind={commandKind}
+          onCommandKindChange={setCommandKind}
+          syntax={copySyntax}
+          onSyntaxChange={setCopySyntax}
+          multiline={multiline}
+          onMultilineChange={setMultiline}
+        />
+      )}
+      {previewError && <FeedbackBanner tone="error">{previewError}</FeedbackBanner>}
+    </div>
+  </div>;
   return <div className="model-settings-fields">
     {!collapseTools && editor === 'schema' && <h3>{copy.options}</h3>}
     {external && !hideDefaultsReset && <div>
@@ -338,6 +434,8 @@ export function ProviderOptions({ cfg, disabled, benchmark = false, onChange, on
     </div>}
     {loadingSchema && <p role="status">{copy.loading}</p>}
     {runtimeNeeded && <p className="app-section-hint">{copy.choose}</p>}
+    {/* Collapsed tools hide everything else; pasting and copying a command stay in view. */}
+    {collapseTools && advanced && commandTools}
     {issues.map((issue, index) => <div key={`${issue.key}:${index}`} id={`${issueId}-${index}`}><FeedbackBanner tone="error">{issue.message}</FeedbackBanner></div>)}
     {unknown.map(key => <FeedbackBanner key={key} tone="error">{key} <button type="button" disabled={disabled} className="app-button app-button--secondary" onClick={() => update(key, undefined)}>{copy.reset}</button></FeedbackBanner>)}
     {formEffective && (editor === 'schema' || formEffective.schema.options.length > 0) && <div hidden={!effective} inert={!effective}>
@@ -368,25 +466,8 @@ export function ProviderOptions({ cfg, disabled, benchmark = false, onChange, on
       {managedOptions.map(option => <SchemaOptionField key={option.key} option={option} stored={values[option.key]} disabled onStore={value => update(option.key, value)} />)}
     </section>}
     {provider !== 'llama.cpp' && !api.isExternalProvider(provider) && <OptionField option={{ key: 'extra_args', target: 'launch', group: 'advanced', kind: { type: 'json' } }} value={values.extra_args} disabled={disabled} onChange={value => update('extra_args', value)} onInvalid={onInvalid} />}
-    {editor === 'schema' && <div className="model-settings-command-import"><label>{copy.import}<textarea className="app-textarea font-mono" disabled={disabled} value={paste} onChange={event => { importRequest.current += 1; setPaste(event.target.value); }} /></label>
-    <label>{commandImportCopy[locale].syntax}<CustomSelect<api.CommandSyntax | ''> ariaLabel={commandImportCopy[locale].syntax}
-      value={importSyntax} disabled={disabled}
-      options={[{ value: '', label: commandImportCopy[locale].choose }, { value: 'windows', label: commandImportCopy[locale].windows }, { value: 'posix', label: commandImportCopy[locale].posix }]}
-      onChange={value => { importRequest.current += 1; setImportSyntax(value); }} /></label>
-    <div className="app-page-actions"><button type="button" className="app-button app-button--secondary app-button--sm" disabled={disabled || !paste.trim() || !importSyntax} onClick={importCommand}>{copy.import}</button></div></div>}
-    <div className="app-page-actions"><button type="button" className="app-button app-button--secondary app-button--sm" disabled={disabled || runtimeNeeded} onClick={() => {
-      const source = cfg;
-      const request = ++previewRequest.current;
-      const current = () => cfgRef.current === source && previewRequest.current === request;
-      void api.providerCommandPreview(source).then(args => {
-        if (!current()) return;
-        setPreviewError('');
-        setPreview((effective ? maskPreview(args, effective.schema, values, liveEntrySecrets()) : args).map(arg => JSON.stringify(arg)).join(' '));
-      }).catch(cause => { if (current()) { setPreview(''); setPreviewError(String(cause)); } });
-    }}>{copy.preview}</button></div>
-    {preview && <pre className="model-settings-command-preview overflow-auto whitespace-pre-wrap">{preview}</pre>}
-    {previewError && <FeedbackBanner tone="error">{previewError}</FeedbackBanner>}
-    {effective && <OccurrenceOrder schema={effective.schema} values={values} disabled={disabled}
+    {!collapseTools && commandTools}
+    {effective && <OccurrenceOrder values={values} disabled={disabled}
       onChange={next => onChange({ provider_options: { ...cfg.provider_options, [provider]: next } })} />}
     {effective && <ConfirmedSyntaxReview effective={effective} disabled={disabled || syntaxBusy}
       onSave={options => { const fingerprint = effective.accepted_fingerprint; if (fingerprint) saveSyntax(() => api.runtimeHelpConfirmSyntax(cfg, fingerprint, options)); }}

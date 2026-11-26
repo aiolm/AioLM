@@ -45,7 +45,7 @@ function measuredAt(value: number): string {
 }
 
 function displayLabel(record: PerformanceBenchmarkRecord): string {
-  return normalizeDisplayText(modelDisplayName(recordedBenchmarkModelLabel(record))).split(/[\\/]/).pop()?.replace(/[\p{Cc}\p{Cf}]/gu, '').trim() ?? '';
+  return normalizeDisplayText(modelDisplayName(recordedBenchmarkModelLabel(record))).replace(/[\p{Cc}\p{Cf}]/gu, '').trim();
 }
 const finite = (value: number | null | undefined) => value != null && Number.isFinite(value) ? value : null;
 

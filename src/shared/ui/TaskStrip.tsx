@@ -1,4 +1,4 @@
-import { normalizeDisplayText } from "../lib/displayPaths";
+import { formatModelLabel, normalizeDisplayText } from "../lib/displayPaths";
 import StableLabel from "./StableLabel";
 import { useEffect, useState } from "react";
 import { errorMessage } from "../api/errors";
@@ -103,7 +103,7 @@ export default function TaskStrip({
           const activeTask = task.state === "running" || task.state === "cancelling";
           const transfer = transferLabel(task, time => t("ui.timeRemaining", { time }));
           const stopLabel = task.pausable ? t("ui.downloadPause") : t("common.cancel");
-          const label = normalizeDisplayText(task.label);
+          const label = task.kind === "model-download" || task.kind === "model-launch" ? formatModelLabel(task.label) : normalizeDisplayText(task.label);
           const status = normalizeDisplayText(statusLabel(task, t));
           const detail = task.detail ? normalizeDisplayText(task.detail) : "";
           const detailNode = task.detail ? (isLongDiagnostic(task.detail)

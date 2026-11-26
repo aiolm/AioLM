@@ -900,12 +900,15 @@ fn discover_folder(
     report: &mut DiscoveryReport,
     cancel: &AtomicBool,
 ) -> Result<(), crate::error::AppError> {
-    let root = folder.canonicalize().map_err(|error| {
-        crate::error::AppError::new(
-            crate::error::AppError::io_kind(&error),
-            "The selected folder is unavailable.",
-        )
-    })?;
+    let root = folder
+        .canonicalize()
+        .map(crate::verbatim_path::strip_windows_verbatim_prefix)
+        .map_err(|error| {
+            crate::error::AppError::new(
+                crate::error::AppError::io_kind(&error),
+                "The selected folder is unavailable.",
+            )
+        })?;
     if !root.is_dir() {
         return Err(crate::error::AppError::validation(
             "Select an existing installation folder.",
@@ -1130,8 +1133,10 @@ mod tests {
         fs::write(&second, b"\x7fELFsecond-entry").unwrap();
         // Discovery resolves the selected root. macOS temporary directories
         // and Windows verbatim prefixes need the same filesystem identity.
-        let first = first.canonicalize().unwrap();
-        let second = second.canonicalize().unwrap();
+        let first =
+            crate::verbatim_path::strip_windows_verbatim_prefix(first.canonicalize().unwrap());
+        let second =
+            crate::verbatim_path::strip_windows_verbatim_prefix(second.canonicalize().unwrap());
         let mut report = DiscoveryReport::default();
         discover_folder(&folder.0, &mut report, &AtomicBool::new(false)).unwrap();
         let a = report
@@ -1139,6 +1144,7 @@ mod tests {
             .iter()
             .find(|c| c.entrypoint_path.as_deref() == first.to_str())
             .unwrap();
+        assert!(!a.entrypoint_path.as_deref().unwrap().starts_with(r"\\?\"));
         let b = report
             .candidates
             .iter()

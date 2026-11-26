@@ -1136,6 +1136,84 @@ pub fn request_fields(provider: ProviderId, options: &Map<String, Value>) -> Map
         .collect()
 }
 
+/// The body of a bash/zsh `$'…'` string after its opening quote: backslash
+/// escapes name control characters and code points; other text is literal.
+fn read_ansi_c_quote(
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+    out: &mut String,
+) -> Result<(), String> {
+    fn code(
+        chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+        radix: u32,
+        max: usize,
+    ) -> Option<u32> {
+        let mut digits = String::new();
+        while digits.len() < max {
+            match chars.peek() {
+                Some(c) if c.is_digit(radix) => {
+                    digits.push(*c);
+                    chars.next();
+                }
+                _ => break,
+            }
+        }
+        u32::from_str_radix(&digits, radix).ok()
+    }
+    loop {
+        match chars.next() {
+            Some('\'') => return Ok(()),
+            Some('\\') => {
+                let escaped = match chars.next() {
+                    Some('n') => '\n',
+                    Some('r') => '\r',
+                    Some('t') => '\t',
+                    Some('a') => '\u{7}',
+                    Some('b') => '\u{8}',
+                    Some('e' | 'E') => '\u{1b}',
+                    Some('f') => '\u{c}',
+                    Some('v') => '\u{b}',
+                    Some(c @ ('\\' | '\'' | '"' | '?')) => c,
+                    Some(radix @ ('x' | 'u' | 'U')) => {
+                        let max = match radix {
+                            'x' => 2,
+                            'u' => 4,
+                            _ => 8,
+                        };
+                        match code(chars, 16, max).and_then(char::from_u32) {
+                            Some(c) => c,
+                            None => return Err("invalid escape in $'…' string".into()),
+                        }
+                    }
+                    Some(digit @ '0'..='7') => {
+                        let mut value = digit.to_digit(8).unwrap_or(0);
+                        for _ in 0..2 {
+                            match chars.peek().and_then(|c| c.to_digit(8)) {
+                                Some(next) => {
+                                    value = value * 8 + next;
+                                    chars.next();
+                                }
+                                None => break,
+                            }
+                        }
+                        char::from_u32(value).ok_or("invalid escape in $'…' string")?
+                    }
+                    Some(other) => {
+                        out.push('\\');
+                        other
+                    }
+                    None => return Err("unterminated quote".into()),
+                };
+                if escaped == '\0' {
+                    return Err("a command line cannot contain NUL".into());
+                }
+                out.push(escaped);
+            }
+            Some(c) => out.push(c),
+            None => return Err("unterminated quote".into()),
+        }
+    }
+}
+
 /// Split a pasted command line the way a POSIX shell would for simple input:
 /// whitespace separates words, quotes group them, a backslash escapes the next
 /// character and a trailing backslash continues the line.
@@ -1158,6 +1236,11 @@ pub fn split_command(text: &str) -> Result<Vec<String>, String> {
                 None => return Err("unterminated escape".into()),
             },
             (Some(_), c) => current.push(c),
+            (None, '$') if chars.peek() == Some(&'\'') => {
+                chars.next();
+                has_word = true;
+                read_ansi_c_quote(&mut chars, &mut current)?;
+            }
             (None, '\'' | '"') => {
                 quote = Some(ch);
                 has_word = true;
@@ -1199,11 +1282,186 @@ pub enum CommandSyntax {
     #[default]
     Posix,
     Windows,
+    #[serde(rename = "powershell")]
+    PowerShell,
+}
+
+/// Split a pasted PowerShell native-command line into its literal arguments:
+/// whitespace separates words, single quotes are literal (`''` is one quote),
+/// double quotes group (`""` and backtick escape a quote), a backtick escapes
+/// the next character or continues the line, a leading `&` call operator is
+/// dropped and `--%` passes the rest by Microsoft C runtime rules. Variables
+/// and expressions are never evaluated; `$name` stays as written.
+fn split_powershell(text: &str) -> Result<Vec<String>, String> {
+    if text.contains('\0') {
+        return Err("a PowerShell command line cannot contain NUL".into());
+    }
+    let single = |c: char| matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}');
+    let double = |c: char| matches!(c, '"' | '\u{201C}' | '\u{201D}' | '\u{201E}');
+    let escaped = |c: char| match c {
+        '0' => '\0',
+        'a' => '\u{7}',
+        'b' => '\u{8}',
+        'e' => '\u{1b}',
+        'f' => '\u{c}',
+        'n' => '\n',
+        'r' => '\r',
+        't' => '\t',
+        'v' => '\u{b}',
+        other => other,
+    };
+    let mut words: Vec<String> = Vec::new();
+    let mut word = String::new();
+    let mut started = false;
+    let mut chars = text.char_indices().peekable();
+    while let Some((index, ch)) = chars.next() {
+        match ch {
+            // `& 'program' ...` or `&'program' ...` runs the program; the
+            // call operator is not an argument.
+            '&' if !started && words.is_empty() => {}
+            c if c.is_whitespace() => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                }
+            }
+            '`' => match chars.next() {
+                Some((_, '\r')) => {
+                    if chars.peek().is_some_and(|(_, c)| *c == '\n') {
+                        chars.next();
+                    }
+                }
+                Some((_, '\n')) => {}
+                Some((_, next)) => {
+                    let value = escaped(next);
+                    if value == '\0' {
+                        return Err("a PowerShell command line cannot contain NUL".into());
+                    }
+                    word.push(value);
+                    started = true;
+                }
+                None => return Err("unterminated escape".into()),
+            },
+            c if single(c) => {
+                started = true;
+                loop {
+                    match chars.next() {
+                        Some((_, q)) if single(q) => {
+                            if chars.peek().is_some_and(|(_, c)| single(*c)) {
+                                chars.next();
+                                word.push('\'');
+                            } else {
+                                break;
+                            }
+                        }
+                        Some((_, c)) => word.push(c),
+                        None => return Err("unterminated quote".into()),
+                    }
+                }
+            }
+            c if double(c) => {
+                started = true;
+                loop {
+                    match chars.next() {
+                        Some((_, q)) if double(q) => {
+                            if chars.peek().is_some_and(|(_, c)| double(*c)) {
+                                chars.next();
+                                word.push('"');
+                            } else {
+                                break;
+                            }
+                        }
+                        Some((_, '`')) => match chars.next() {
+                            Some((_, next)) => {
+                                let value = escaped(next);
+                                if value == '\0' {
+                                    return Err(
+                                        "a PowerShell command line cannot contain NUL".into()
+                                    );
+                                }
+                                word.push(value);
+                            }
+                            None => return Err("unterminated quote".into()),
+                        },
+                        Some((_, c)) => word.push(c),
+                        None => return Err("unterminated quote".into()),
+                    }
+                }
+            }
+            '-' if !started
+                && text[index..].starts_with("--%")
+                && text[index + 3..]
+                    .chars()
+                    .next()
+                    .is_none_or(char::is_whitespace) =>
+            {
+                // Stop-parsing: the rest reaches the program unparsed.
+                let rest = &text[index + 3..];
+                words.extend(split_command_with_syntax(rest, CommandSyntax::Windows)?);
+                break;
+            }
+            c => {
+                word.push(c);
+                started = true;
+            }
+        }
+    }
+    if started {
+        words.push(word);
+    }
+    start_process_argv(words)
+}
+
+/// `Start-Process [-FilePath] program [-ArgumentList] 'raw command line'`
+/// runs the program with that string as its raw command line, split by the
+/// Microsoft C runtime rules. Other command words are returned unchanged.
+fn start_process_argv(words: Vec<String>) -> Result<Vec<String>, String> {
+    let is_start = words.first().is_some_and(|first| {
+        ["start-process", "start", "saps"].contains(&first.to_ascii_lowercase().as_str())
+    });
+    if !is_start {
+        return Ok(words);
+    }
+    let mut program = None;
+    let mut arguments = None;
+    let mut rest = words.into_iter().skip(1);
+    while let Some(word) = rest.next() {
+        let lower = word.to_ascii_lowercase();
+        let mut value = |name: &str| {
+            rest.next()
+                .ok_or(format!("Start-Process {name} needs a value"))
+        };
+        match lower.as_str() {
+            "-filepath" | "-path" | "-pspath" => program = Some(value("-FilePath")?),
+            "-argumentlist" | "-args" => arguments = Some(value("-ArgumentList")?),
+            "-nonewwindow" | "-wait" | "-passthru" => {}
+            _ if lower.starts_with('-') => {
+                return Err(format!(
+                    "Start-Process {word} is not supported in a pasted command"
+                ));
+            }
+            _ if program.is_none() => program = Some(word),
+            _ if arguments.is_none() => arguments = Some(word),
+            _ => return Err("Start-Process takes one -ArgumentList string here".into()),
+        }
+    }
+    let program = program.ok_or("Start-Process needs -FilePath")?;
+    let mut argv = vec![program];
+    if let Some(arguments) = arguments {
+        argv.extend(split_command_with_syntax(
+            &arguments,
+            CommandSyntax::Windows,
+        )?);
+    }
+    Ok(argv)
 }
 
 pub fn split_command_with_syntax(text: &str, syntax: CommandSyntax) -> Result<Vec<String>, String> {
     if syntax == CommandSyntax::Posix {
         return split_command(text);
+    }
+    if syntax == CommandSyntax::PowerShell {
+        return split_powershell(text);
     }
     if text.contains('\0') {
         return Err("a Windows command line cannot contain NUL".into());
@@ -1448,6 +1706,115 @@ mod tests {
         assert!(split_command_with_syntax("", CommandSyntax::Windows)
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn powershell_lines_split_into_literal_arguments() {
+        let split = |text: &str| split_command_with_syntax(text, CommandSyntax::PowerShell);
+        let words = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        // The app's own copied form: call operator, single quotes, bare words.
+        assert_eq!(
+            split("& 'C:\\Engines\\synthetic engine\\serve.exe' --port 8080 '' '--chat-template={x}' '$HOME' 'a,b' 'it''s' 'say \"hi\"' '8080'").unwrap(),
+            words(&["C:\\Engines\\synthetic engine\\serve.exe", "--port", "8080", "", "--chat-template={x}", "$HOME", "a,b", "it's", "say \"hi\"", "8080"])
+        );
+        // Hand-written forms: double quotes keep backslashes, adjacent parts
+        // join, backticks escape and continue lines (LF and CRLF).
+        assert_eq!(
+            split("serve.exe --dir \"C:\\dir\\\" --name=\"a b\"'c' x`\"y \"q`\"\"\"\" `\n --t `\r\n end").unwrap(),
+            words(&["serve.exe", "--dir", "C:\\dir\\", "--name=a bc", "x\"y", "q\"\"", "--t", "end"])
+        );
+        assert_eq!(split("a\tb\nc").unwrap(), words(&["a", "b", "c"]));
+        assert_eq!(split("\"`t\"").unwrap(), words(&["\t"]));
+        // Stop-parsing hands the rest to the C runtime rules.
+        assert_eq!(
+            split("engine --% --raw \"a b\" $x").unwrap(),
+            words(&["engine", "--raw", "a b", "$x"])
+        );
+        assert_eq!(split("--%x").unwrap(), words(&["--%x"]));
+        // The app's Windows PowerShell 5.1 form: values 5.1 would drop or
+        // break follow --% with C runtime quoting and doubled quotes.
+        assert_eq!(
+            split("& 'C:\\Engines\\synthetic engine\\serve.exe' --% --empty \"\" --say \"say \"\"hi\"\"\" --dir \"C:\\dir with space\\\\\" --pipe \"a|b\" --plain x").unwrap(),
+            words(&["C:\\Engines\\synthetic engine\\serve.exe", "--empty", "", "--say", "say \"hi\"", "--dir", "C:\\dir with space\\", "--pipe", "a|b", "--plain", "x"])
+        );
+        assert_eq!(
+            split("serve --% \"a\\\\\"\"b\"").unwrap(),
+            words(&["serve", "a\\\"b"])
+        );
+        // A quoted ampersand is an argument, not the call operator.
+        assert_eq!(split("'&' x").unwrap(), words(&["&", "x"]));
+        assert_eq!(
+            split("&'C:\\x y\\serve.exe' --port 1").unwrap(),
+            words(&["C:\\x y\\serve.exe", "--port", "1"])
+        );
+        assert_eq!(split("  & serve a&b").unwrap(), words(&["serve", "a&b"]));
+        // The app's form for values Windows PowerShell 5.1 would break; it
+        // runs the same in 5.1 and every PowerShell 7 argument-passing mode.
+        assert_eq!(
+            split(r#"Start-Process -FilePath 'C:\Engines\synthetic engine\serve.exe' -ArgumentList '--empty "" --say "say \"hi\"" --dir "C:\dir with space\\" --pipe a|b --env %PATH% it''s x' -NoNewWindow -Wait"#).unwrap(),
+            words(&["C:\\Engines\\synthetic engine\\serve.exe", "--empty", "", "--say", "say \"hi\"", "--dir", "C:\\dir with space\\", "--pipe", "a|b", "--env", "%PATH%", "it's", "x"])
+        );
+        assert_eq!(
+            split("start serve.exe 'a \"b c\"'").unwrap(),
+            words(&["serve.exe", "a", "b c"])
+        );
+        assert_eq!(split("Start-Process -FilePath x").unwrap(), words(&["x"]));
+        // The app's one-option-per-line form.
+        assert_eq!(
+            split("C:\\Engines\\gufo.exe serve llm `\n  --model 'C:\\models\\m one.gguf' `\r\n  --top-k '20' `\n  --flag").unwrap(),
+            words(&["C:\\Engines\\gufo.exe", "serve", "llm", "--model", "C:\\models\\m one.gguf", "--top-k", "20", "--flag"])
+        );
+        assert!(split("Start-Process -FilePath x -Verb RunAs").is_err());
+        assert!(split("Start-Process -ArgumentList 'a'").is_err());
+        assert!(split("'open").is_err());
+        assert!(split("\"open").is_err());
+        assert!(split("x`").is_err());
+        assert!(split("x`0").is_err());
+        assert!(split("").unwrap().is_empty());
+        assert_eq!(
+            serde_json::from_value::<CommandSyntax>(json!("powershell")).unwrap(),
+            CommandSyntax::PowerShell
+        );
+    }
+
+    #[test]
+    fn posix_lines_round_trip_the_copied_form() {
+        assert_eq!(
+            split_command("/opt/engine --name 'it'\\''s $HOME' '--chat-template={x}' '' '=x' \\\n  --port 8080").unwrap(),
+            ["/opt/engine", "--name", "it's $HOME", "--chat-template={x}", "", "=x", "--port", "8080"]
+                .map(String::from)
+        );
+        // Control characters are copied as bash/zsh $'…' escapes.
+        assert_eq!(
+            split_command(
+                r#"/opt/engine --prompt $'line one\r\nline two\tend' $'it\'s \\ \x1b' $'é\101\q'"#
+            )
+            .unwrap(),
+            [
+                "/opt/engine",
+                "--prompt",
+                "line one\r\nline two\tend",
+                "it's \\ \u{1b}",
+                "\u{e9}A\\q"
+            ]
+            .map(String::from)
+        );
+        assert!(split_command("$'open").is_err());
+        assert!(split_command(r"$'\x00'").is_err());
+        assert_eq!(
+            split_command("a$b '$'").unwrap(),
+            ["a$b", "$"].map(String::from)
+        );
+        // The copied cmd.exe form splits back by the C runtime rules.
+        assert_eq!(
+            split_command_with_syntax(
+                "\"C:\\dir with space\\serve.exe\" \"say \\\"hi\\\"\" \"a&b\" \"C:\\dir with space\\\\\" \"\"",
+                CommandSyntax::Windows
+            )
+            .unwrap(),
+            ["C:\\dir with space\\serve.exe", "say \"hi\"", "a&b", "C:\\dir with space\\", ""]
+                .map(String::from)
+        );
     }
 
     fn map(value: Value) -> Map<String, Value> {

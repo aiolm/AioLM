@@ -271,7 +271,8 @@ impl ModelProbeCache {
 static MODEL_PROBES: std::sync::LazyLock<std::sync::Mutex<ModelProbeCache>> =
     std::sync::LazyLock::new(Default::default);
 fn model_key(registration: &Registration, cfg: &AppConfig) -> String {
-    let identity = serde_json::json!({"root":root(),"manifest":registration.manifest,"program":registration.executable_sha256,"probe":registration.probe_sha256,"artifacts":registration.artifacts_sha256,"model":cfg.active_model,"launch":launch_fingerprint(&registration.manifest,cfg)});
+    let model = crate::verbatim_path::strip_windows_verbatim_prefix_str(&cfg.active_model);
+    let identity = serde_json::json!({"root":root(),"manifest":registration.manifest,"program":registration.executable_sha256,"probe":registration.probe_sha256,"artifacts":registration.artifacts_sha256,"model":model.as_ref(),"launch":launch_fingerprint(&registration.manifest,cfg)});
     format!("{:x}", Sha256::digest(identity.to_string().as_bytes()))
 }
 fn cached_probe(
@@ -899,7 +900,8 @@ fn expand(
         let value = match name {
             "host" => "127.0.0.1".into(),
             "port" => port.to_string(),
-            "model" => cfg.active_model.clone(),
+            "model" => crate::verbatim_path::strip_windows_verbatim_prefix_str(&cfg.active_model)
+                .into_owned(),
             "model_alias" => model_alias.into(),
             "api_key" => key.into(),
             "options_json" => {
@@ -1017,18 +1019,20 @@ fn run_probe(
             "adapter does not support this OS/architecture",
         ));
     }
-    let mut command = crate::procutil::std_command(&m.probe.program);
+    let program = crate::verbatim_path::strip_windows_verbatim_prefix_str(&m.probe.program);
+    let mut command = crate::procutil::std_command(program.as_ref());
     command
         .env_clear()
         .envs(crate::runtime::child_environment());
     for arg in &m.probe.args {
-        command.arg(expand(
+        let expanded = expand(
             arg,
             cfg,
             cfg.port,
             "",
             &super::launch::served_model_name(&cfg.active_model),
-        )?);
+        )?;
+        command.arg(crate::verbatim_path::strip_windows_verbatim_prefix_arg(&expanded).as_ref());
     }
     if let Some(tail) = super::runtime_auto::resolved_option_transport(&root(), cfg, m)? {
         command.args(tail);
@@ -1049,9 +1053,9 @@ fn run_probe(
         command.env(name, value);
     }
     if let Some(cwd) = &m.probe.working_directory {
-        command.current_dir(cwd);
+        command.current_dir(crate::verbatim_path::strip_windows_verbatim_prefix_str(cwd).as_ref());
     } else if let Some(cwd) = &m.launch.working_directory {
-        command.current_dir(cwd);
+        command.current_dir(crate::verbatim_path::strip_windows_verbatim_prefix_str(cwd).as_ref());
     } else if path(m.engine_id, &m.runtime_id)?.is_file() {
         if let Some(cwd) = super::execution_context::directory(cfg, None)? {
             command.current_dir(cwd);
@@ -1120,7 +1124,9 @@ fn validate_probe_result(
     if probe.schema_version != VERSION
         || probe.engine_id != manifest.engine_id
         || probe.runtime_id != manifest.runtime_id
-        || model.is_some_and(|model| probe.model != model)
+        || model.is_some_and(|model| {
+            !crate::verbatim_path::same_verbatim_stripped_path(&probe.model, model)
+        })
         || !valid_text(&probe.version, 256)
         || !valid_text(&probe.accelerator, 128)
         || !valid_text(&probe.served_model, 256)
@@ -1333,7 +1339,9 @@ pub(crate) fn prepare_automatic_launch(
     }
     prepare_owned_helper(&mut r, cfg, cancel)?;
     if !r.probe.as_ref().is_some_and(|probe| {
-        probe.model_supported && probe.model == cfg.active_model && !cfg.active_model.is_empty()
+        probe.model_supported
+            && crate::verbatim_path::same_verbatim_stripped_path(&probe.model, &cfg.active_model)
+            && !cfg.active_model.is_empty()
     }) || r.model_fingerprint != fingerprint(&cfg.active_model)
     {
         return Ok(false);
@@ -1361,7 +1369,10 @@ fn refresh_blocking(cfg: &AppConfig, cancel: Option<&AtomicBool>) -> Result<(), 
         if let Some(probe) = r.probe.clone().filter(|probe| {
             !cfg.active_model.is_empty()
                 && probe.model_supported
-                && probe.model == cfg.active_model
+                && crate::verbatim_path::same_verbatim_stripped_path(
+                    &probe.model,
+                    &cfg.active_model,
+                )
                 && r.model_fingerprint == fingerprint(&cfg.active_model)
                 && r.launch_fingerprint == launch_fingerprint(&r.manifest, cfg)
         }) {
@@ -1606,7 +1617,9 @@ pub fn info(cfg: &AppConfig) -> Result<EngineInfo, AppError> {
             "The selected model is unsupported by this registered runtime.",
         ));
     }
-    if p.model != cfg.active_model || model_fingerprint != fingerprint(&cfg.active_model) {
+    if !crate::verbatim_path::same_verbatim_stripped_path(&p.model, &cfg.active_model)
+        || model_fingerprint != fingerprint(&cfg.active_model)
+    {
         return Err(AppError::validation(
             "selected model requires a successful adapter probe",
         ));
@@ -1677,13 +1690,71 @@ pub fn info(cfg: &AppConfig) -> Result<EngineInfo, AppError> {
     })
 }
 pub fn command(cfg: &AppConfig, port: u16, key: &str) -> Result<EngineCommand, AppError> {
+    let upstream = info(cfg)?.upstream_model;
+    command_with_alias(cfg, port, key, upstream)
+}
+
+/// The launch command as configured, for display only. Launch still requires
+/// a probe that matches the current model and launch options, but changing an
+/// option must not hide the command it produces: the model alias comes from
+/// the last matching probe, or the selected model when none matches. The
+/// reason launch would refuse is returned beside the command.
+pub fn preview_command(cfg: &AppConfig, port: u16) -> Result<PreviewCommand, AppError> {
+    let (upstream, blocked) = match info(cfg) {
+        Ok(info) => (info.upstream_model, None),
+        Err(error) => (
+            read_registration(super::provider_of(cfg), &cfg.active_runtime)?
+                .probe
+                .filter(|probe| {
+                    crate::verbatim_path::same_verbatim_stripped_path(
+                        &probe.model,
+                        &cfg.active_model,
+                    ) && !probe.served_model.is_empty()
+                })
+                .map(|probe| probe.served_model)
+                .unwrap_or_else(|| {
+                    crate::verbatim_path::strip_windows_verbatim_prefix_str(&cfg.active_model)
+                        .into_owned()
+                }),
+            Some(error.message),
+        ),
+    };
+    let launch = command_with_alias(cfg, port, "", upstream)?;
+    let manifest = manifest(super::provider_of(cfg), &cfg.active_runtime)?;
+    let engine = super::runtime_auto::engine_command_preview(&root(), cfg, &manifest, port)?;
+    Ok(PreviewCommand {
+        launch,
+        engine,
+        launch_blocked: blocked,
+    })
+}
+
+/// A registered runtime's launch command for display, with the engine's own
+/// command when AioLM starts the engine through its helper.
+pub struct PreviewCommand {
+    pub launch: EngineCommand,
+    pub engine: Option<Vec<String>>,
+    pub launch_blocked: Option<String>,
+}
+
+fn command_with_alias(
+    cfg: &AppConfig,
+    port: u16,
+    key: &str,
+    upstream_model: String,
+) -> Result<EngineCommand, AppError> {
     let m = manifest(super::provider_of(cfg), &cfg.active_runtime)?;
-    let info = info(cfg)?;
     let mut args = m
         .launch
         .args
         .iter()
-        .map(|a| expand(a, cfg, port, key, &info.upstream_model).map_err(AppError::validation))
+        .map(|a| {
+            let expanded =
+                expand(a, cfg, port, key, &upstream_model).map_err(AppError::validation)?;
+            Ok::<_, AppError>(
+                crate::verbatim_path::strip_windows_verbatim_prefix_arg(&expanded).into_owned(),
+            )
+        })
         .collect::<Result<Vec<_>, _>>()?;
     // Manifest options and options only the runtime's accepted help
     // describes resolve together through the common schema; unknown keys block
@@ -1703,30 +1774,29 @@ pub fn command(cfg: &AppConfig, port: u16, key: &str) -> Result<EngineCommand, A
         .env
         .iter()
         .filter(|(_, value)| !(key.is_empty() && value.as_str() == "{api_key}"))
-        .map(|(k, v)| {
-            Ok((
-                k.into(),
-                expand(v, cfg, port, key, &info.upstream_model)?.into(),
-            ))
-        })
+        .map(|(k, v)| Ok((k.into(), expand(v, cfg, port, key, &upstream_model)?.into())))
         .collect::<Result<Vec<_>, String>>()
         .map_err(AppError::validation)?;
     if let Some((name, value)) = bridge_environment(&m).map_err(AppError::validation)? {
         env.push((name.into(), value.into()));
     }
     Ok(EngineCommand {
-        program: m.launch.program.into(),
+        program: crate::verbatim_path::strip_windows_verbatim_prefix(PathBuf::from(
+            m.launch.program,
+        )),
         args,
         env,
         working_directory: super::execution_context::directory(
             cfg,
-            m.launch.working_directory.map(PathBuf::from),
+            m.launch
+                .working_directory
+                .map(|dir| crate::verbatim_path::strip_windows_verbatim_prefix(PathBuf::from(dir))),
         )?,
-        upstream_model: info.upstream_model.clone(),
+        upstream_model: upstream_model.clone(),
         readiness: Readiness {
             health_path: m.health_path,
             health_authenticated: m.health_authenticated,
-            expected_model: info.upstream_model,
+            expected_model: upstream_model,
             expected_model_aliases: Vec::new(),
         },
     })
@@ -1738,10 +1808,10 @@ pub fn compatibility(cfg: &AppConfig) -> Result<super::compat::ModelCompatibilit
         .map(|cached| cached.result)
         .transpose()?
         .or(registration.probe);
-    if probe
-        .as_ref()
-        .is_some_and(|probe| probe.model == cfg.active_model && !probe.model_supported)
-    {
+    if probe.as_ref().is_some_and(|probe| {
+        crate::verbatim_path::same_verbatim_stripped_path(&probe.model, &cfg.active_model)
+            && !probe.model_supported
+    }) {
         return Ok(super::compat::ModelCompatibility {
             provider: registration.manifest.engine_id,
             status: super::compat::CompatStatus::Unsupported,
@@ -1911,13 +1981,13 @@ fn model_bindings(
             let path = Path::new(&model.path);
             if let Ok(mut artifact) = super::execution::inspect(path) {
                 if artifact.format != super::artifacts::ArtifactFormat::Unknown {
-                    artifact.name = crate::models::grouped_shard_name(&model.name);
+                    artifact.name = crate::model_names::strip_shard_suffix(&model.name);
                     models.push(artifact);
                     continue;
                 }
             }
             let metadata = fs::metadata(path).ok();
-            models.push(super::artifacts::ModelArtifact { path:model.path, name:model.name, format:super::artifacts::ArtifactFormat::Unknown, role:super::artifacts::ArtifactRole::Model, size_bytes:0, file_count:usize::from(metadata.is_some()), architectures:vec![], model_type:None, quantization:None, has_tokenizer:false, has_processor:false, has_chat_template:false, modalities:Modalities::default(), missing:if metadata.is_some() { vec![] } else { vec!["registered model binding is missing".into()] }, incomplete:false, revision:None, repository:None, selected_file:None, selected_weight_files:None, ownership:"external", notes:vec!["Opaque adapter model binding; weight size is unknown. Loader/tasks/inputs are checked by the model-specific probe.".into()] });
+            models.push(super::artifacts::ModelArtifact { path:model.path, name:crate::model_names::strip_shard_suffix(&model.name), format:super::artifacts::ArtifactFormat::Unknown, role:super::artifacts::ArtifactRole::Model, size_bytes:0, file_count:usize::from(metadata.is_some()), architectures:vec![], model_type:None, quantization:None, has_tokenizer:false, has_processor:false, has_chat_template:false, modalities:Modalities::default(), missing:if metadata.is_some() { vec![] } else { vec!["registered model binding is missing".into()] }, incomplete:false, revision:None, repository:None, selected_file:None, selected_weight_files:None, ownership:"external", notes:vec!["Opaque adapter model binding; weight size is unknown. Loader/tasks/inputs are checked by the model-specific probe.".into()] });
         }
     }
     models

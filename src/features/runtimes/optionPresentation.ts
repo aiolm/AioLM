@@ -1,6 +1,27 @@
 import { staticCandidates, type CommandEntry, type ImportedPlan, type OptionSchema, type OptionSchemaDefinition, type OptionSchemaFact } from '../../shared/api/runtimeHelp';
 import { readStored } from './optionOrder';
 
+/** What display projections show instead of a secret: the app's mask and the
+ * native redaction. A copied preview carries them, never the real value. */
+export const MASKED_SECRET = '•••';
+export const REDACTED_SECRET = '[REDACTED]';
+
+export function isSecretPlaceholder(value: unknown): boolean {
+  return value === MASKED_SECRET || value === REDACTED_SECRET;
+}
+
+/** A pasted copy of a masked preview names its secrets only by placeholder.
+ * Those occurrences are left out so applying the plan keeps the saved value. */
+export function withoutSecretPlaceholders<T extends { key: string; values: unknown[] }>(plan: readonly T[]): { plan: T[]; kept: string[] } {
+  const kept = new Set<string>();
+  const rest = plan.filter(item => {
+    if (!item.values.some(isSecretPlaceholder)) return true;
+    kept.add(item.key);
+    return false;
+  });
+  return { plan: rest, kept: [...kept] };
+}
+
 export function supported<T>(fact: OptionSchemaFact<T> | undefined): T | undefined {
   return fact && fact.certainty !== 'unknown' ? (fact.value ?? undefined) : undefined;
 }
@@ -59,9 +80,9 @@ export function maskPreview(argv: string[], schema: OptionSchema, values: Record
     } catch { return false; }
   };
   return argv.map(token => {
-    if (isSecret(token)) return '•••';
+    if (isSecret(token)) return MASKED_SECRET;
     const equals = token.indexOf('=');
-    return equals > 0 && isSecret(token.slice(equals + 1)) ? `${token.slice(0, equals + 1)}•••` : token;
+    return equals > 0 && isSecret(token.slice(equals + 1)) ? `${token.slice(0, equals + 1)}${MASKED_SECRET}` : token;
   });
 }
 

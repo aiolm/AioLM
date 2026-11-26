@@ -7,7 +7,7 @@ import Badge from "../../shared/ui/Badge";
 import ProgressBar from "../../shared/ui/ProgressBar";
 import { CustomSelect } from "../../shared/ui/CustomSelect";
 import { providerCopy } from '../../shared/i18n/providerCopy';
-import { normalizeDisplayPath } from "../../shared/lib/displayPaths";
+import { formatModelLabel, normalizeDisplayPath } from "../../shared/lib/displayPaths";
 import { LocalTaskCancelButton } from "../../shared/ui/TaskCancellation";
 import ModelIcon from '../../shared/ui/ModelIcon';
 import { formatDuration } from '../../shared/lib/units';
@@ -372,7 +372,7 @@ export default function DiscoverView({ controller }: { controller: ReturnType<ty
               {!activeWholeSnapshotTask && pausedWholeSnapshot && (
                 <InlinePausedTransfer
                   entry={pausedWholeSnapshot}
-                  label={normalizeDisplayPath(pausedWholeSnapshot.label || selected.id)}
+                  label={formatModelLabel(pausedWholeSnapshot.label || selected.id)}
                   busy={resumingIds.has(pausedWholeSnapshot.id) || discardingIds.has(pausedWholeSnapshot.id)}
                   serverBlocked={store.busy}
                   onResume={(entry) => void resumePending(entry)}
@@ -505,7 +505,7 @@ export default function DiscoverView({ controller }: { controller: ReturnType<ty
                     {pausedEntry && (
                       <InlinePausedTransfer
                         entry={pausedEntry}
-                        label={normalizeDisplayPath(pausedEntry.label || displayPath)}
+                        label={formatModelLabel(pausedEntry.label || displayPath)}
                         busy={resumingIds.has(pausedEntry.id) || discardingIds.has(pausedEntry.id)}
                         serverBlocked={store.busy}
                         onResume={(entry) => void resumePending(entry)}
@@ -603,7 +603,7 @@ export default function DiscoverView({ controller }: { controller: ReturnType<ty
                   {pausedEntry && (
                     <InlinePausedTransfer
                       entry={pausedEntry}
-                      label={normalizeDisplayPath(pausedEntry.label || displayFilePath)}
+                      label={formatModelLabel(pausedEntry.label || displayFilePath)}
                       busy={resumingIds.has(pausedEntry.id) || discardingIds.has(pausedEntry.id)}
                       serverBlocked={store.busy}
                       onResume={(entry) => void resumePending(entry)}
@@ -620,7 +620,7 @@ export default function DiscoverView({ controller }: { controller: ReturnType<ty
       <ConfirmDialog
         open={discarding !== null}
         title={t("ui.pendingDiscardTitle")}
-        description={t("ui.pendingDiscardBody", { file: discarding ? normalizeDisplayPath(discarding.label) : "" })}
+        description={t("ui.pendingDiscardBody", { file: discarding ? formatModelLabel(discarding.label) : "" })}
         confirmLabel={t("ui.pendingDiscard")}
         cancelLabel={t("common.cancel")}
         busy={discardBusy}

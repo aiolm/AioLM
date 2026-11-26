@@ -26,6 +26,12 @@ describe('owned media preview independently of inference encoding', () => {
     expect(screen.getByText('전사문 · whisper · speech-session')).toBeInTheDocument();
   });
 
+  it('shows the transcription model by name, not its local path or part suffix', () => {
+    render(<MediaPreview locale="en" attachment={{ name: 'speech.wav', kind: 'audio', ref: `${'e'.repeat(64)}.wav`, dataUrl: '',
+      preparation: { kind: 'transcription', text: 'saved speech', model: 'C:\\synthetic\\whisper-0001-of-0004.gguf', sessionId: 'speech-session' } }} />);
+    expect(screen.getByText('Transcript · whisper.gguf · speech-session')).toBeInTheDocument();
+  });
+
   it('recovers an image preview on retry and clears prior errors', async () => {
     vi.mocked(resolveMedia)
       .mockRejectedValueOnce(new Error('temporary read failure'))

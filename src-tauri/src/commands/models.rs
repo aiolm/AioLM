@@ -529,20 +529,16 @@ fn model_binding_uses_file(path: &Path, candidate: &Path) -> bool {
     if fs::canonicalize(path).is_ok_and(|bound| bound == candidate) {
         return true;
     }
-    let Some((base, _, total)) = path
+    let Some(parts) = path
         .file_name()
         .and_then(|name| name.to_str())
-        .and_then(models::shard_name)
+        .and_then(crate::model_names::parse_gguf_shard)
     else {
         return false;
     };
     let parent = path.parent().unwrap_or(Path::new(""));
-    let extension = path
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or("gguf");
-    (1..=total).any(|index| {
-        fs::canonicalize(parent.join(format!("{base}-{index:05}-of-{total:05}.{extension}")))
+    (1..=parts.total).any(|index| {
+        fs::canonicalize(parent.join(parts.format_part(index)))
             .is_ok_and(|shard| shard == candidate)
     })
 }

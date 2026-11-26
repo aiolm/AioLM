@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import * as api from "../api/index";
 import { isIpcErrorKind } from "../api/ipcError";
+import { formatModelLabel } from "../lib/displayPaths";
 import {
   createDownloadId,
   isDownloadTaskActive,
@@ -189,7 +190,7 @@ export async function resumePendingDownload(
   registerTask({
     id: taskId,
     kind: "model-download",
-    label: entry.label || options?.fallbackLabel || entry.repo_id,
+    label: formatModelLabel(entry.label || options?.fallbackLabel || entry.repo_id),
     repoId: entry.repo_id,
     filePath: entry.file_path ?? undefined,
     downloadKind: entry.snapshot ? "snapshot" : "gguf",
@@ -237,7 +238,7 @@ export async function resumePendingDownload(
     recordCompletedDownload({
       id: downloadId,
       repoId: entry.repo_id,
-      label: entry.label || entry.repo_id,
+      label: formatModelLabel(entry.label || entry.repo_id),
       filePath: entry.file_path ?? undefined,
       selectedFile: entry.file_path,
       path: completedPath,

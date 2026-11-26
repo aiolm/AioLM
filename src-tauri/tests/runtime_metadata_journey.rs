@@ -372,6 +372,9 @@ async fn manifest_option_metadata_reaches_the_schema_validation_profile_and_spaw
     // Display and record projections hide schema-secret values; the launch
     // argv above keeps them exactly.
     let preview = providers::command_preview(&loaded).unwrap();
+    // Launch accepts this configuration, so the preview reports no block.
+    assert_eq!(preview.launch_blocked, None);
+    let preview = preview.argv;
     assert!(
         !preview.iter().any(|arg| arg.contains(AMBER)),
         "{preview:?}"
@@ -386,6 +389,25 @@ async fn manifest_option_metadata_reaches_the_schema_validation_profile_and_spaw
     assert!(
         preview.contains(&"512".to_string()),
         "other values stay readable"
+    );
+    // A changed launch option needs a fresh probe before launch, but the
+    // preview still shows the changed command and says why launch would stop.
+    let mut changed = loaded.clone();
+    changed
+        .provider_options
+        .get_mut(&changed.active_provider)
+        .unwrap()
+        .insert("fresh_cache".into(), json!(256));
+    assert!(providers::registry::command(&changed, port, "synthetic-key").is_err());
+    let stale = providers::command_preview(&changed).unwrap();
+    assert!(stale.argv.contains(&"256".to_string()), "{:?}", stale.argv);
+    assert!(
+        stale
+            .launch_blocked
+            .as_deref()
+            .is_some_and(|reason| reason.contains("fresh adapter probe")),
+        "{:?}",
+        stale.launch_blocked
     );
     let shown = cli_config(&area.path);
     assert!(!shown.contains(AMBER), "{shown}");

@@ -307,21 +307,42 @@ pub fn provider_of(cfg: &crate::config::AppConfig) -> ProviderId {
     ProviderId::parse(&cfg.active_provider).unwrap_or(ProviderId::Llama)
 }
 
+/// A launch command shown before running it.
+#[derive(Debug, Clone, Serialize)]
+pub struct CommandPreview {
+    /// What AioLM runs.
+    pub argv: Vec<String>,
+    /// The inference engine's own command line, when AioLM runs the engine
+    /// through a helper; run directly, the engine serves on the profile's port.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine_argv: Option<Vec<String>>,
+    /// Why launch would still refuse this command (for example a model that
+    /// awaits its fresh adapter probe). The preview is built regardless.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub launch_blocked: Option<String>,
+}
+
 /// The command line the selected runtime would launch with, for display.
 /// The app key is never included, and values the runtime's schema marks
 /// secret are replaced; the launch itself uses them unchanged.
 pub fn command_preview(
     cfg: &crate::config::AppConfig,
-) -> Result<Vec<String>, crate::error::AppError> {
-    let plan =
-        adapter::resolve(cfg).launch(cfg, cfg.port, "", &crate::gpu::ResolvedGpu::default())?;
-    let argv = launch::preview(&plan);
-    Ok(runtime_schema::mask_argv(
-        &registry::root(),
-        cfg,
-        argv,
-        runtime_schema::REDACTED,
-    ))
+) -> Result<CommandPreview, crate::error::AppError> {
+    let (plan, engine, launch_blocked) = if provider_of(cfg).is_custom() {
+        let preview = registry::preview_command(cfg, cfg.port)?;
+        (preview.launch, preview.engine, preview.launch_blocked)
+    } else {
+        let plan =
+            adapter::resolve(cfg).launch(cfg, cfg.port, "", &crate::gpu::ResolvedGpu::default())?;
+        (plan, None, None)
+    };
+    let mask =
+        |argv| runtime_schema::mask_argv(&registry::root(), cfg, argv, runtime_schema::REDACTED);
+    Ok(CommandPreview {
+        argv: mask(launch::preview(&plan)),
+        engine_argv: engine.map(mask),
+        launch_blocked,
+    })
 }
 
 /// The runtime id a configuration selects for its provider.

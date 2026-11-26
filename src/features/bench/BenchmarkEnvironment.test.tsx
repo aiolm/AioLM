@@ -7,12 +7,17 @@ import { rtProbe } from '../../shared/api';
 import type { AppConfig, DeviceReport, RuntimeCapabilities } from '../../shared/api/types';
 import { materializeProfileApplication } from '../../shared/config/settingsProfiles';
 import * as api from '../../shared/api';
+import * as providers from '../../shared/api/providers';
 import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
 
 vi.mock('../../shared/api/transport', () => ({ isNativeRuntimeAvailable: () => true }));
 vi.mock('../../shared/api', async original => ({
   ...await original<typeof api>(), rtProbe: vi.fn(), providerCatalog: vi.fn(async () => []),
   providerRuntimes: vi.fn(async () => []), providerOptionSchema: vi.fn(),
+}));
+vi.mock('../../shared/api/providers', async original => ({
+  ...await original<typeof providers>(),
+  providerCommandPreview: vi.fn(),
 }));
 
 const device: DeviceReport = {
@@ -150,5 +155,110 @@ describe('benchmark execution environment', () => {
     await waitFor(() => expect(term('Selected GPU')).toHaveTextContent('Example CUDA GPU'));
     await act(async () => resolveOld(capabilities('vulkan', ['Vulkan0: Old GPU'])));
     expect(term('Selected GPU')).not.toHaveTextContent('Old GPU');
+  });
+
+  it('keeps command preview idle while closed and reveals direct/helper commands, formatting, copy and masking when opened', async () => {
+    const agent = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Windows NT 10.0; Win64; x64)');
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    try {
+      const secretOption = schemaOption({ key: 'token', flag: '--token', target: 'launch', group: 'options', kind: { type: 'text' } });
+      secretOption.sensitive = { certainty: 'verified', value: true };
+      vi.mocked(api.providerOptionSchema).mockResolvedValue(effectiveSchema([], [secretOption]));
+      vi.mocked(providers.providerCommandPreview)
+        .mockRejectedValueOnce({ kind: 'validation', message: 'Synthetic benchmark preview failure' })
+        .mockResolvedValueOnce({
+          argv: [String.raw`C:\Synthetic\aiolm-helper.exe`, 'serve', '--', 'aiolm-auto-argv-v1', '{"version":1}'],
+          engine_argv: [
+            String.raw`C:\Synthetic\engine.exe`,
+            'serve',
+            '--model',
+            String.raw`\\?\C:\한글 모델\synthetic.gguf`,
+            '--token',
+            'SYNTHETIC-SECRET',
+            '--tag',
+            '%ENV_TAG%',
+          ],
+          launch_blocked: 'selected model requires a fresh adapter probe',
+        });
+
+      const externalCfg: AppConfig = {
+        ...cfg,
+        active_provider: 'custom.auto-fedcba9876543210',
+        active_runtime: 'connection-fedcba9876543210',
+        provider_options: { 'custom.auto-fedcba9876543210': { token: 'SYNTHETIC-SECRET' } },
+      };
+      render(view(externalCfg));
+      expect(providers.providerCommandPreview).not.toHaveBeenCalled();
+
+      const previewDisclosure = disclosure('Command preview');
+      expect(previewDisclosure).not.toHaveAttribute('open');
+      fireEvent.click(within(previewDisclosure).getByText('Command preview'));
+      await waitFor(() => expect(providers.providerCommandPreview).toHaveBeenCalledTimes(1));
+      expect(await within(previewDisclosure).findByText('Synthetic benchmark preview failure')).toBeVisible();
+
+      fireEvent.click(within(previewDisclosure).getByRole('button', { name: 'Retry' }));
+      await waitFor(() => expect(providers.providerCommandPreview).toHaveBeenCalledTimes(2));
+
+      const expectedPowerShell =
+        "C:\\Synthetic\\engine.exe serve `\n"
+        + "  --model 'C:\\한글 모델\\synthetic.gguf' `\n"
+        + "  --token '•••' `\n"
+        + "  --tag '%ENV_TAG%'";
+      await waitFor(() => expect(previewDisclosure.querySelector('pre')?.textContent).toBe(expectedPowerShell));
+      expect(previewDisclosure.textContent).not.toContain('\\\\?\\');
+      expect(previewDisclosure.textContent).not.toContain('SYNTHETIC-SECRET');
+      expect(within(previewDisclosure).getByText(/stand for hidden secret values/)).toBeVisible();
+      expect(within(previewDisclosure).getByText(/Launch is still blocked: selected model requires a fresh adapter probe/)).toBeVisible();
+
+      const multiline = within(previewDisclosure).getByRole('checkbox', { name: 'One option per line' });
+      expect(multiline.closest('label')).toHaveClass('model-settings-command-check');
+      fireEvent.click(multiline);
+      expect(previewDisclosure.querySelector('pre')?.textContent).toBe(
+        "C:\\Synthetic\\engine.exe serve --model 'C:\\한글 모델\\synthetic.gguf' --token '•••' --tag '%ENV_TAG%'",
+      );
+
+      fireEvent.click(within(previewDisclosure).getByRole('combobox', { name: 'Shown and copied as' }));
+      fireEvent.click(screen.getByRole('option', { name: 'Windows argument quoting' }));
+      expect(previewDisclosure.querySelector('pre')?.textContent).toBe(
+        'C:\\Synthetic\\engine.exe serve --model "C:\\한글 모델\\synthetic.gguf" --token ••• --tag %ENV_TAG%',
+      );
+      expect(within(previewDisclosure).getByText(/can be replaced by the environment variable/)).toBeVisible();
+
+      fireEvent.click(within(previewDisclosure).getByRole('combobox', { name: 'Command' }));
+      fireEvent.click(screen.getByRole('option', { name: 'Command AioLM runs' }));
+      expect(previewDisclosure.querySelector('pre')?.textContent).toBe(
+        'C:\\Synthetic\\aiolm-helper.exe serve -- aiolm-auto-argv-v1 "{\\"version\\":1}"',
+      );
+
+      fireEvent.click(within(previewDisclosure).getByRole('button', { name: 'Copy command' }));
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith(
+        'C:\\Synthetic\\aiolm-helper.exe serve -- aiolm-auto-argv-v1 "{\\"version\\":1}"',
+      ));
+      expect(await within(previewDisclosure).findByText('Copied')).toBeVisible();
+    } finally {
+      agent.mockRestore();
+    }
+  });
+
+  it('shows a built-in llama.cpp preview as its single command without a command kind choice', async () => {
+    vi.mocked(providers.providerCommandPreview).mockResolvedValueOnce({
+      argv: ['/synthetic/llama-server', '--model', '/synthetic/model.gguf', '--port', '8080'],
+    });
+    render(view());
+    const previewDisclosure = disclosure('Command preview');
+    fireEvent.click(within(previewDisclosure).getByText('Command preview'));
+    fireEvent.click(await within(previewDisclosure).findByRole('checkbox', { name: 'One option per line' }));
+    expect(previewDisclosure.querySelector('pre')?.textContent).toContain('/synthetic/llama-server --model /synthetic/model.gguf --port 8080');
+    expect(within(previewDisclosure).queryByRole('combobox', { name: 'Command' })).not.toBeInTheDocument();
+    expect(within(previewDisclosure).getByRole('combobox', { name: 'Shown and copied as' })).toBeVisible();
+  });
+
+  it('prompts to choose a runtime in command preview when none is selected', async () => {
+    render(view({ ...cfg, active_provider: 'vllm', active_runtime: '' }));
+    const previewDisclosure = disclosure('Command preview');
+    fireEvent.click(within(previewDisclosure).getByText('Command preview'));
+    expect(await within(previewDisclosure).findByText('Choose a runtime')).toBeVisible();
+    expect(providers.providerCommandPreview).not.toHaveBeenCalled();
   });
 });

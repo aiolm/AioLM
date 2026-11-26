@@ -55,7 +55,7 @@ describe('standalone runtime argv preview lifetime', () => {
     await advance(1);
 
     expect(runtimeHelp.runtimeHelpResolve).toHaveBeenCalledExactlyOnceWith(schema, scope, latest);
-    expect(screen.getByText('"--label" "latest"', { selector: 'pre' })).toBeVisible();
+    expect(screen.getByText('--label latest', { selector: 'pre' })).toBeVisible();
   });
 
   it.each(['success', 'validation failure'] as const)('ignores an old %s after a newer preview completes', async outcome => {
@@ -74,7 +74,7 @@ describe('standalone runtime argv preview lifetime', () => {
       await old.promise.catch(() => undefined);
     });
 
-    expect(screen.getByText('"--label" "latest"', { selector: 'pre' })).toBeVisible();
+    expect(screen.getByText('--label latest', { selector: 'pre' })).toBeVisible();
     expect(screen.queryByText(/stale/)).not.toBeInTheDocument();
     expect(screen.getByLabelText(/^--label/)).not.toHaveAttribute('aria-invalid');
   });

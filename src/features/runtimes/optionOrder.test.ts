@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import type { OptionSchema, OptionSchemaDefinition } from '../../shared/api/runtimeHelp';
 import { defined } from '../../testing/assertDefined';
-import { applyPlan, editOption, expandPlan, moveOccurrence, ORDER_KEY, readOrder, setOccurrenceSpelling } from './optionOrder';
+import { applyPlan, editOption, expandPlan, ORDER_KEY, readOrder, setOccurrenceSpelling } from './optionOrder';
 
 const unknown = { value: null, certainty: 'unknown' as const };
 const known = <T,>(value: T) => ({ value, certainty: 'verified' as const, source: { kind: 'adapter', id: 't', revision: 'r' } });
@@ -59,7 +59,7 @@ describe('saved command-line order', () => {
     expect(values).toEqual({ alpha: '1', beta: '2', cache: false });
   });
 
-  it('follows edits, additions, removals, reordering and alias changes', () => {
+  it('follows edits, additions, removals, re-imports and alias changes', () => {
     let values = applyPlan(schema, {}, { plan: [
       { key: 'alpha', spelling: null, values: ['1'] },
       { key: 'beta', spelling: null, values: ['2'] },
@@ -74,9 +74,12 @@ describe('saved command-line order', () => {
     // Removing the first alpha keeps the remaining occurrence in place.
     values = editOption(schema, values, 'alpha', 'three', [1]);
     expect(keys(values)).toEqual(['beta=2', 'beta=4', 'alpha=three']);
-    // Moving it back to schema order makes the record redundant.
-    values = moveOccurrence(schema, values, 2, -1);
-    values = moveOccurrence(schema, values, 1, -1);
+    // Re-importing every option in schema order makes the record redundant.
+    values = applyPlan(schema, values, { plan: [
+      { key: 'alpha', spelling: null, values: ['three'] },
+      { key: 'beta', spelling: null, values: ['2'] },
+      { key: 'beta', spelling: null, values: ['4'] },
+    ] });
     expect(keys(values)).toEqual(['alpha=three', 'beta=2', 'beta=4']);
     expect(values[ORDER_KEY]).toBeUndefined();
     // One occurrence's own alias needs a record; the shared alias does not.
@@ -105,7 +108,6 @@ describe('saved command-line order', () => {
       expect(readOrder(values)).toEqual({ ok: false, error: reason });
       // Edits keep the refused record for review; imports are refused.
       expect(editOption(schema, values, 'beta', '5')[ORDER_KEY]).toEqual(record);
-      expect(moveOccurrence(schema, values, 0, 1)).toBe(values);
       expect(() => applyPlan(schema, values, { plan: [] })).toThrow('review');
     }
   });
@@ -137,7 +139,6 @@ describe('saved command-line order', () => {
       // operations leave the values alone and imports are refused.
       expect(editOption(schema, values, 'beta', '5')[ORDER_KEY]).toBe(record);
       expect(editOption(schema, values, 'alpha', undefined)[ORDER_KEY]).toBe(record);
-      expect(moveOccurrence(schema, values, 0, 1)).toBe(values);
       expect(setOccurrenceSpelling(schema, values, 'alpha', 0, '-a')).toBe(values);
       expect(() => applyPlan(schema, values, { plan: [] })).toThrow('review');
     }
@@ -233,7 +234,7 @@ describe('imported JSON option numbers', () => {
 });
 
 describe('expanded saved occurrences', () => {
-  it('keeps complete mixed plans, aliases and moved output while preserving saved input', () => {
+  it('keeps complete mixed plans and aliases while preserving saved input', () => {
     const values = {
       alpha: { spelling: '-a', occurrences: [['A1'], [], ['A3']] },
       beta: 'B', cache: false, port: 999, untouched: { nested: ['kept'] },
@@ -264,15 +265,6 @@ describe('expanded saved occurrences', () => {
     expect(plan.filter(item => item.key === 'alpha').map(item => item.spelling ?? null))
       .toEqual(['-a', '--alpha', null]);
     expect(new Set(plan.map(item => item.values)).size).toBe(plan.length);
-    expect(moveOccurrence(schema, values, 1, 1)).toEqual({
-      alpha: { spelling: '-a', occurrences: [['A1'], [], ['A3']] },
-      beta: 'B', cache: false, port: 999, untouched: { nested: ['kept'] },
-      gone: { spelling: null, occurrences: [[null], [{ literal: true }]] },
-      [ORDER_KEY]: { version: 1, occurrences: [
-        { key: 'cache' }, { key: 'gone' }, { key: 'alpha', spelling: '-a' }, { key: 'beta' },
-        { key: 'alpha' }, { key: 'gone', spelling: '--gone' }, { key: 'alpha' },
-      ] },
-    });
     expect(values).toEqual(before);
   });
 

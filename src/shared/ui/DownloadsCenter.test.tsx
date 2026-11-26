@@ -559,4 +559,49 @@ describe('DownloadsCenter', () => {
     expect(screen.getByTestId('activity-center-popover')).not.toHaveAttribute('hidden');
     expect(screen.queryByTestId('downloads-center-popover')).not.toBeInTheDocument();
   });
+
+  it('strips split-part suffixes from active and paused model download labels', async () => {
+    const pausedShard: api.PendingDownload = {
+      id: 'pending-shard',
+      repo_id: 'owner/shard',
+      file_path: '4bit/model-00001-of-00004.safetensors',
+      revision: 'd'.repeat(40),
+      snapshot: true,
+      models_dir: 'models',
+      include_companions: false,
+      label: '4bit/model-00001-of-00004.safetensors',
+      total: 1000,
+      received: 250,
+      updated_at: 10,
+      files: [{ path: 'models/4bit/model-00001-of-00004.safetensors', size: 1000 }],
+    };
+    vi.mocked(api.hfPendingDownloads).mockResolvedValue([pausedShard]);
+
+    registerTask({
+      id: 'model-download:split',
+      kind: 'model-download',
+      repoId: 'owner/gguf',
+      filePath: 'model-0001-of-0004.gguf',
+      label: 'model-0001-of-0004.gguf',
+      phase: 'downloading',
+      received: 500,
+      total: 1000,
+      interruptible: true,
+      pausable: true,
+      cancel: vi.fn(),
+    });
+
+    render(
+      <I18nProvider initialLocale="en">
+        <DownloadsCenter />
+      </I18nProvider>,
+    );
+
+    fireEvent.click(await screen.findByTestId('downloads-center-trigger'));
+    const popover = await screen.findByTestId('downloads-center-popover');
+    expect(within(popover).getByTestId('download-center-active-row')).toHaveTextContent('model.gguf');
+    expect(within(popover).getByTestId('download-center-active-row')).not.toHaveTextContent('0001-of-0004');
+    expect(within(popover).getByTestId('download-center-paused-row')).toHaveTextContent('4bit/model.safetensors');
+    expect(within(popover).getByTestId('download-center-paused-row')).not.toHaveTextContent('00001-of-00004');
+  });
 });

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { errorMessage } from '../../shared/api/errors';
 import { resolveMedia } from '../../shared/api/commands';
 import type { ProviderId } from '../../shared/api/providers';
-import { normalizeDisplayText } from '../../shared/lib/displayPaths';
+import { formatModelLabel, normalizeDisplayText } from '../../shared/lib/displayPaths';
 import type { ImageAttachment } from './chatTypes';
 import type { Locale } from '../../shared/i18n/i18nCatalog';
 import { mediaPreparationCopy } from './mediaPreparationCopy';
@@ -88,7 +88,7 @@ export default function MediaPreview({ attachment, small = false, provider = 'vl
       </dialog>,
       document.body,
     )}
-    {preparation?.kind === 'transcription' && <small className="text-xs ui-color-muted">{copy.transcript} · {preparation.model} · {preparation.sessionId}</small>}
+    {preparation?.kind === 'transcription' && <small className="text-xs ui-color-muted">{copy.transcript} · {formatModelLabel(preparation.model)} · {preparation.sessionId}</small>}
     {preparation?.kind === 'video-frames' && <small className="text-xs ui-color-muted">{preparation.frames.length} {copy.frames} · {copy.noAudio}</small>}
     {error && <small className="text-xs ui-color-danger" role="alert">{error}</small>}
   </span>;

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { isModelFilePath, modelDisplayName, normalizeDisplayPath, restoreDisplayPath, stripModelShardSuffix } from "./displayPaths";
+import { formatModelLabel, formatModelShardPart, isModelFilePath, modelDisplayName, normalizeDisplayPath, parseModelShardSuffix, restoreDisplayPath, stripModelShardSuffix, stripWindowsVerbatimPrefixArg } from "./displayPaths";
 
 const qwen = "Qwen3.8-Flash-Next-AD-4.27bpw-Q4_K_M-M64";
 
@@ -82,15 +82,86 @@ describe("stripModelShardSuffix", () => {
     ["org/model-00001-of-00004.gguf", "org/model.gguf"],
     ["org/model-00004-of-00004.GGUF", "org/model.GGUF"],
     ["model-00001-of-00004", "model"],
+    ["org/model-0001-of-0004.gguf", "org/model.gguf"],
+    ["org/model-0004-of-0004.safetensors", "org/model.safetensors"],
+    ["model-0002-of-0004", "model"],
+    ["variants · 4bit/model-0001-of-0002.safetensors", "variants · 4bit/model.safetensors"],
     ["org/model", "org/model"],
     ["org/model.gguf", "org/model.gguf"],
     ["org/model-00000-of-00004.gguf", "org/model-00000-of-00004.gguf"],
     ["org/model-00005-of-00004.gguf", "org/model-00005-of-00004.gguf"],
     ["org/model-00001-of-00001.gguf", "org/model-00001-of-00001.gguf"],
+    ["org/model-0001-of-0001.gguf", "org/model-0001-of-0001.gguf"],
+    ["org/model-00001-of-0004.gguf", "org/model-00001-of-0004.gguf"],
+    ["org/model-00001-OF-00004.gguf", "org/model-00001-OF-00004.gguf"],
     ["org/model-1-of-4.gguf", "org/model-1-of-4.gguf"],
     ["org/model-00001-of-00004.bin", "org/model-00001-of-00004.bin"],
     ["org/model-00001-of-00004.gguf-extra", "org/model-00001-of-00004.gguf-extra"],
+    ["org/-00001-of-00004.gguf", "org/-00001-of-00004.gguf"],
   ])("groups only valid shard suffixes without shortening model IDs: %s", (value, expected) => {
     expect(stripModelShardSuffix(value)).toBe(expected);
+  });
+});
+
+describe("shared model labels", () => {
+  it.each([
+    ["C:\\models\\Qwen-Q4_K_M-0001-of-0004.gguf", "Qwen-Q4_K_M.gguf"],
+    ["/models/Qwen-Q4_K_M-00001-of-00004.gguf", "Qwen-Q4_K_M.gguf"],
+    ["/models/model-0001-of-0003.safetensors", "model.safetensors"],
+    ["variants · 4bit/model-0001-of-0002.safetensors", "variants · 4bit/model.safetensors"],
+    ["variants · 4bit/model.safetensors", "variants · 4bit/model.safetensors"],
+  ])("names %s the same way as the native side", (value, expected) => {
+    expect(modelDisplayName(value)).toBe(expected);
+    expect(formatModelLabel(value)).toBe(expected);
+  });
+
+  it.each([
+    ["Q4/model-00001-of-00002.gguf", "Q4/model.gguf"],
+    [`hf/owner/gemma/snapshots/${"a".repeat(40)}`, "gemma"],
+    ["openai/whisper-large-v3", "openai/whisper-large-v3"],
+    ["llama.cpp · ROCm (AMD) · b11029", "llama.cpp · ROCm (AMD) · b11029"],
+    ["AioLM 1.2.0", "AioLM 1.2.0"],
+    ["\\\\?\\C:\\models\\a-0001-of-0002.gguf", "a.gguf"],
+  ])("shortens explicit paths only and groups parts in %s", (value, expected) => {
+    expect(formatModelLabel(value)).toBe(expected);
+  });
+
+  it("parses part syntax with the width the repository used", () => {
+    const four = parseModelShardSuffix("m-0002-of-0010.gguf")!;
+    expect(four).toMatchObject({ base: "m", index: 2, total: 10, width: 4, extension: "gguf" });
+    expect(formatModelShardPart(four, 10)).toBe("m-0010-of-0010.gguf");
+    const five = parseModelShardSuffix("m-00002-of-00010")!;
+    expect(formatModelShardPart(five, 1)).toBe("m-00001-of-00010");
+    expect(parseModelShardSuffix("m-0002-of-0010.safetensors", { extensions: ["gguf"] })).toBeNull();
+    expect(parseModelShardSuffix("m-0002-of-0010", { allowExtensionless: false })).toBeNull();
+    expect(parseModelShardSuffix("m-0002-of-0010.SAFETENSORS", { exactExtensionCase: true })).toBeNull();
+  });
+});
+
+describe("stripWindowsVerbatimPrefixArg", () => {
+  it.each([
+    ["\\\\?\\C:\\한글 모델\\sub dir\\weights.gguf", "C:\\한글 모델\\sub dir\\weights.gguf"],
+    ["\\\\?\\D:/models/draft model.gguf", "D:/models/draft model.gguf"],
+    ["\\\\?\\UNC\\server\\share\\한글 폴더\\mmproj.gguf", "\\\\server\\share\\한글 폴더\\mmproj.gguf"],
+    ["\\\\?\\unc\\fileserver\\models\\mtp-draft.gguf", "\\\\fileserver\\models\\mtp-draft.gguf"],
+    ["--model=\\\\?\\C:\\한글 모델\\model.gguf", "--model=C:\\한글 모델\\model.gguf"],
+    ["--mmproj=\\\\?\\UNC\\server\\share\\mmproj.gguf", "--mmproj=\\\\server\\share\\mmproj.gguf"],
+    ["-md=\\\\?\\unc\\nas\\models\\draft.gguf", "-md=\\\\nas\\models\\draft.gguf"],
+  ])("strips Windows verbatim prefix in arg token %s", (value, expected) => {
+    expect(stripWindowsVerbatimPrefixArg(value)).toBe(expected);
+  });
+
+  it.each([
+    "C:\\models\\ordinary.gguf",
+    "\\\\server\\share\\ordinary.gguf",
+    "/synthetic/models/model.gguf",
+    "https://example.invalid/models?v=1",
+    "\\\\?\\Volume{01234567-89ab-cdef-0123-456789abcdef}\\models\\a.gguf",
+    "\\\\?\\Global\\PIPE\\synthetic",
+    "\\\\?\\한글",
+    "--literal=http://example.invalid?x=1",
+    "\\\\?\\UNC\\",
+  ])("leaves non-drive/device/URL token untouched: %s", (value) => {
+    expect(stripWindowsVerbatimPrefixArg(value)).toBe(value);
   });
 });

@@ -617,7 +617,11 @@ pub(crate) fn connection_presentation(
             let engine = option_manifest(manifest).ok()??;
             let prefix = registry::launch_prefix(&engine);
             let scope = engine.command_layout.as_ref()?.scope(&prefix).ok()?;
-            Some((scope.join(" "), launch.program))
+            Some((
+                scope.join(" "),
+                crate::verbatim_path::strip_windows_verbatim_prefix_str(&launch.program)
+                    .into_owned(),
+            ))
         }
     }
 }
@@ -647,6 +651,84 @@ pub(crate) fn resolved_option_transport(
     cfg: &crate::config::AppConfig,
     manifest: &registry::RuntimeManifest,
 ) -> Result<Option<Vec<String>>, crate::error::AppError> {
+    let Some(transport) = option_transport(root, cfg, manifest)? else {
+        return Ok(None);
+    };
+    Ok(Some(vec![
+        "--".into(),
+        ARGV_HEADER.into(),
+        serde_json::to_string(&transport).map_err(|error| error.to_string())?,
+    ]))
+}
+
+/// The engine's own command line behind an automatic registration's helper:
+/// the program and arguments the helper starts, with the model, alias and
+/// host it would pass and `port` for the port. AioLM runs the helper instead
+/// and gives the engine a free internal port, so this is for running the
+/// engine yourself. `None` when the registration is not an automatic managed
+/// one (its launch command is then the engine's own).
+pub(crate) fn engine_command_preview(
+    root: &Path,
+    cfg: &crate::config::AppConfig,
+    manifest: &registry::RuntimeManifest,
+    port: u16,
+) -> Result<Option<Vec<String>>, crate::error::AppError> {
+    engine_command(root, cfg, manifest, &port.to_string())
+}
+
+/// Written where a recorded engine command bound its port. The helper picks
+/// the engine's port itself when it starts and never reports it back, so a
+/// benchmark record cannot state the port the engine actually served on.
+pub(crate) const RECORDED_PORT_PLACEHOLDER: &str = "{port}";
+
+/// The engine command behind a helper run, for a benchmark record: every
+/// argument the helper passed to the engine, with the port binding left as
+/// [`RECORDED_PORT_PLACEHOLDER`]. Writing the benchmark's front port there
+/// would record a value the engine never received.
+pub(crate) fn engine_command_record(
+    root: &Path,
+    cfg: &crate::config::AppConfig,
+    manifest: &registry::RuntimeManifest,
+) -> Result<Option<Vec<String>>, crate::error::AppError> {
+    engine_command(root, cfg, manifest, RECORDED_PORT_PLACEHOLDER)
+}
+
+fn engine_command(
+    root: &Path,
+    cfg: &crate::config::AppConfig,
+    manifest: &registry::RuntimeManifest,
+    port: &str,
+) -> Result<Option<Vec<String>>, crate::error::AppError> {
+    let Some(spec) = owned_spec(manifest) else {
+        return Ok(None);
+    };
+    let Target::Managed { launch, .. } = &spec.target else {
+        return Ok(None);
+    };
+    let transport = option_transport(root, cfg, manifest)?;
+    let legacy_alias = format!("aiolm-{}", spec.runtime_id);
+    let alias = spec.served_alias.as_deref().unwrap_or(&legacy_alias);
+    let args = transported_arguments_with_port(
+        launch,
+        transport.as_ref(),
+        &cfg.active_model,
+        port,
+        alias,
+    )?;
+    Ok(Some(
+        std::iter::once(
+            crate::verbatim_path::strip_windows_verbatim_prefix_str(&launch.program).into_owned(),
+        )
+        .chain(args)
+        .collect(),
+    ))
+}
+
+fn option_transport(
+    root: &Path,
+    cfg: &crate::config::AppConfig,
+    manifest: &registry::RuntimeManifest,
+) -> Result<Option<OptionTransport>, crate::error::AppError> {
     if cfg.active_model.is_empty() {
         return Ok(None);
     }
@@ -701,18 +783,18 @@ pub(crate) fn resolved_option_transport(
         if let Some(original) = markers.get(token) {
             *token = original.clone();
             bindings.insert(index, original.clone());
+        } else {
+            let stripped = crate::verbatim_path::strip_windows_verbatim_prefix_arg(token);
+            if stripped.len() != token.len() {
+                *token = stripped.into_owned();
+            }
         }
     }
-    let transport = OptionTransport {
+    Ok(Some(OptionTransport {
         version: 1,
         argv,
         bindings,
-    };
-    Ok(Some(vec![
-        "--".into(),
-        ARGV_HEADER.into(),
-        serde_json::to_string(&transport).map_err(|error| error.to_string())?,
-    ]))
+    }))
 }
 
 fn transported_arguments(
@@ -722,11 +804,24 @@ fn transported_arguments(
     port: u16,
     alias: &str,
 ) -> Result<Vec<String>, crate::error::AppError> {
+    transported_arguments_with_port(launch, transport, model, &port.to_string(), alias)
+}
+
+fn transported_arguments_with_port(
+    launch: &registry::ProcessSpec,
+    transport: Option<&OptionTransport>,
+    model: &str,
+    port: &str,
+    alias: &str,
+) -> Result<Vec<String>, crate::error::AppError> {
     let Some(transport) = transport else {
         return launch
             .args
             .iter()
-            .map(|arg| expand(arg, model, port, alias))
+            .map(|arg| {
+                let expanded = expand_with_port(arg, model, port, alias)?;
+                Ok(crate::verbatim_path::strip_windows_verbatim_prefix_arg(&expanded).into_owned())
+            })
             .collect();
     };
     let expected: Vec<&String> = launch
@@ -752,9 +847,9 @@ fn transported_arguments(
         .enumerate()
         .map(|(index, arg)| {
             if transport.bindings.contains_key(&index) {
-                expand(arg, model, port, alias)
+                expand_with_port(arg, model, port, alias)
             } else {
-                Ok(arg.clone())
+                Ok(crate::verbatim_path::strip_windows_verbatim_prefix_arg(arg).into_owned())
             }
         })
         .collect()
@@ -982,9 +1077,19 @@ fn expand(
     port: u16,
     alias: &str,
 ) -> Result<String, crate::error::AppError> {
+    expand_with_port(value, model, &port.to_string(), alias)
+}
+
+fn expand_with_port(
+    value: &str,
+    model: &str,
+    port: &str,
+    alias: &str,
+) -> Result<String, crate::error::AppError> {
+    let model = crate::verbatim_path::strip_windows_verbatim_prefix_str(model);
     let binding = |token: &str| match token {
-        "{model}" => Some(model.to_owned()),
-        "{port}" => Some(port.to_string()),
+        "{model}" => Some(model.as_ref().to_owned()),
+        "{port}" => Some(port.to_owned()),
         "{host}" => Some("127.0.0.1".into()),
         "{model_alias}" => Some(alias.into()),
         _ => None,
@@ -1006,9 +1111,15 @@ fn expand(
 /// sanitized like the built-in engines' served names. `None` keeps the legacy
 /// connection-scoped identifier when no usable model name remains.
 fn readable_served_alias(display_name: &str) -> Option<String> {
-    let stem = match display_name.rsplit_once('.') {
-        Some((stem, extension)) if extension.eq_ignore_ascii_case("gguf") => stem,
-        _ => display_name,
+    let cleaned = crate::model_names::strip_shard_suffix(display_name);
+    let stem = match cleaned.rsplit_once('.') {
+        Some((stem, extension))
+            if extension.eq_ignore_ascii_case("gguf")
+                || extension.eq_ignore_ascii_case("safetensors") =>
+        {
+            stem
+        }
+        _ => cleaned.as_str(),
     };
     let alias = super::launch::served_model_name(stem);
     // `model` is the sanitizer's degenerate fallback, not a real model name.
@@ -1024,7 +1135,7 @@ async fn upstream(
     model: &str,
     transport: Option<&OptionTransport>,
 ) -> Result<(String, String, Option<ChildGuard>), crate::error::AppError> {
-    if model != spec.model_path {
+    if !crate::verbatim_path::same_verbatim_stripped_path(model, &spec.model_path) {
         return Err(crate::error::AppError::validation(
             "selected model differs from automatic connection",
         ));
@@ -1054,7 +1165,8 @@ async fn upstream(
                 .iter()
                 .chain(launch.env.values())
                 .any(|arg| has_binding(arg, "{model_alias}"));
-            let mut command = crate::procutil::std_command(&launch.program);
+            let program = crate::verbatim_path::strip_windows_verbatim_prefix_str(&launch.program);
+            let mut command = crate::procutil::std_command(program.as_ref());
             command
                 .args(transported_arguments(
                     launch, transport, model, port, alias,
@@ -1065,7 +1177,9 @@ async fn upstream(
                 command.env(name, expand(value, model, port, alias)?);
             }
             if let Some(cwd) = &launch.working_directory {
-                command.current_dir(cwd);
+                command.current_dir(
+                    crate::verbatim_path::strip_windows_verbatim_prefix_str(cwd).as_ref(),
+                );
             }
             command
                 .stdin(std::process::Stdio::null())
@@ -1091,7 +1205,9 @@ async fn upstream(
                     if info.models.len() != 1 {
                         return Err(crate::error::AppError::validation("automatic launch requires exactly one served model; its model identity is ambiguous"));
                     }
-                    let expected = if aliased { alias } else { model };
+                    let clean_model =
+                        crate::verbatim_path::strip_windows_verbatim_prefix_str(model);
+                    let expected = if aliased { alias } else { clean_model.as_ref() };
                     if info.models[0].id != expected {
                         return Err(crate::error::AppError::validation("the model API did not confirm the selected launch identity; automatic connection remains unverified"));
                     }
@@ -1570,6 +1686,14 @@ mod tests {
             Some("My-Model-v1")
         );
         // Degenerate names keep the legacy connection-scoped identifier.
+        assert_eq!(
+            readable_served_alias("Qwen-Q4_K_M-0001-of-0004.gguf").as_deref(),
+            Some("Qwen-Q4_K_M")
+        );
+        assert_eq!(
+            readable_served_alias("Qwen-Q4_K_M-00001-of-00004.gguf").as_deref(),
+            Some("Qwen-Q4_K_M")
+        );
         assert_eq!(readable_served_alias("model.gguf"), None);
         assert_eq!(readable_served_alias(".gguf"), None);
         assert_eq!(readable_served_alias("---"), None);
@@ -1968,9 +2092,20 @@ mod tests {
             ]
         );
         assert_eq!(target.request.scope, ["serve", "llm"]);
+        let expected_engine = crate::verbatim_path::strip_windows_verbatim_prefix_str(
+            engine.to_string_lossy().as_ref(),
+        )
+        .into_owned();
+        let expected_script = crate::verbatim_path::strip_windows_verbatim_prefix_str(
+            script.to_string_lossy().as_ref(),
+        )
+        .into_owned();
+        let expected_model =
+            crate::verbatim_path::strip_windows_verbatim_prefix_str(&managed.model_path)
+                .into_owned();
         assert_eq!(
             connection_presentation(&managed_manifest),
-            Some(("serve llm".into(), engine.to_string_lossy().into_owned()))
+            Some(("serve llm".into(), expected_engine.clone()))
         );
         let help =
             super::super::runtime_schema::manifest_help_command(&managed_manifest, &target.request)
@@ -2060,14 +2195,15 @@ mod tests {
             "owned-alias",
         )
         .unwrap();
+        assert!(!actual.iter().any(|arg| arg.contains(r"\\?\")));
         assert_eq!(
             actual,
             [
-                script.to_string_lossy().into_owned(),
+                expected_script.clone(),
                 "serve".into(),
                 "llm".into(),
                 "--model".into(),
-                managed.model_path.clone(),
+                expected_model.clone(),
                 "--port=43123".into(),
                 "--host=127.0.0.1".into(),
                 "--alias".into(),
@@ -2078,6 +2214,32 @@ mod tests {
                 "{model}".into(),
             ]
         );
+        // The preview's engine command is the program the helper starts with
+        // the same arguments, without the helper or its transport header.
+        let engine_preview = engine_command_preview(&root, &options_cfg, &managed_manifest, 43123)
+            .unwrap()
+            .unwrap();
+        let spec = owned_spec(&managed_manifest).unwrap();
+        let legacy_alias = format!("aiolm-{}", spec.runtime_id);
+        let served = spec.served_alias.as_deref().unwrap_or(&legacy_alias);
+        let mut expected = vec![expected_engine.clone()];
+        expected.extend(
+            transported_arguments(
+                launch,
+                Some(&transport),
+                &options_cfg.active_model,
+                43123,
+                served,
+            )
+            .unwrap(),
+        );
+        assert_eq!(engine_preview, expected);
+        assert!(!engine_preview.iter().any(|arg| arg.contains(r"\\?\")));
+        assert!(engine_preview.contains(&"--fresh-label".to_string()));
+        assert!(engine_preview.contains(&"--port=43123".to_string()));
+        assert!(!engine_preview
+            .iter()
+            .any(|arg| arg == ARGV_HEADER || arg == "--"));
         let mut invalid: OptionTransport = serde_json::from_str(&tail[2]).unwrap();
         invalid.bindings.clear();
         assert!(transported_arguments(
@@ -2183,5 +2345,324 @@ mod tests {
             let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
             assert_eq!(run_internal(&args).await.unwrap_err().message, error);
         }
+    }
+
+    #[test]
+    fn preview_and_launch_args_strip_windows_verbatim_prefixes_for_models_and_sidecars() {
+        let verbatim_program = r"\\?\C:\한글 엔진\bin dir\synthetic-engine.exe";
+        let verbatim_script = r"\\?\C:\한글 스크립트\entry point.py";
+        let verbatim_model = r"\\?\C:\한글 모델\sub dir\primary.gguf";
+        let verbatim_unc_model = r"\\?\UNC\fileserver\models\한글 공유\unc-model.gguf";
+        let verbatim_mmproj = r"\\?\C:\한글 모델\mmproj-vision.gguf";
+        let verbatim_draft = r"\\?\UNC\fileserver\models\한글 공유\draft model.gguf";
+        let verbatim_mtp = r"\\?\C:\한글 모델\mtp head.gguf";
+
+        let launch = registry::ProcessSpec {
+            program: verbatim_program.into(),
+            args: vec![
+                verbatim_script.into(),
+                "serve".into(),
+                "--model".into(),
+                "{model}".into(),
+                "--port={port}".into(),
+                "--host={host}".into(),
+            ],
+            env: BTreeMap::new(),
+            working_directory: None,
+        };
+        let transport = OptionTransport {
+            version: 1,
+            argv: vec![
+                verbatim_script.into(),
+                "serve".into(),
+                "--model".into(),
+                "{model}".into(),
+                "--port={port}".into(),
+                "--host={host}".into(),
+                "--mmproj".into(),
+                verbatim_mmproj.into(),
+                format!("--model-draft={verbatim_draft}"),
+                "--mtp-model".into(),
+                verbatim_mtp.into(),
+            ],
+            bindings: BTreeMap::from([
+                (3, "{model}".into()),
+                (4, "--port={port}".into()),
+                (5, "--host={host}".into()),
+            ]),
+        };
+
+        let drive_args = transported_arguments(
+            &launch,
+            Some(&transport),
+            verbatim_model,
+            8080,
+            "synthetic-alias",
+        )
+        .unwrap();
+        assert_eq!(
+            drive_args,
+            [
+                r"C:\한글 스크립트\entry point.py",
+                "serve",
+                "--model",
+                r"C:\한글 모델\sub dir\primary.gguf",
+                "--port=8080",
+                "--host=127.0.0.1",
+                "--mmproj",
+                r"C:\한글 모델\mmproj-vision.gguf",
+                r"--model-draft=\\fileserver\models\한글 공유\draft model.gguf",
+                "--mtp-model",
+                r"C:\한글 모델\mtp head.gguf",
+            ]
+        );
+        assert!(drive_args
+            .iter()
+            .all(|arg| !arg.contains(r"\\?\") && !arg.contains('?')));
+
+        let unc_args = transported_arguments(
+            &launch,
+            Some(&transport),
+            verbatim_unc_model,
+            8080,
+            "synthetic-alias",
+        )
+        .unwrap();
+        assert_eq!(unc_args[3], r"\\fileserver\models\한글 공유\unc-model.gguf");
+        assert!(unc_args
+            .iter()
+            .all(|arg| !arg.contains(r"\\?\") && !arg.contains('?')));
+
+        assert!(crate::verbatim_path::same_verbatim_stripped_path(
+            r"C:\한글 모델\sub dir\primary.gguf",
+            verbatim_model
+        ));
+        assert!(crate::verbatim_path::same_verbatim_stripped_path(
+            r"\\fileserver\models\한글 공유\unc-model.gguf",
+            verbatim_unc_model
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn command_preview_and_engine_preview_omit_windows_verbatim_prefixes_end_to_end() {
+        const CHILD: &str = "AIOLM_AUTO_VERBATIM_PREVIEW_FIXTURE";
+        const FILTER: &str = "providers::runtime_auto::tests::command_preview_and_engine_preview_omit_windows_verbatim_prefixes_end_to_end";
+        if std::env::var_os(CHILD).is_none() {
+            let area = Area::new();
+            let mut command = crate::procutil::std_command(std::env::current_exe().unwrap());
+            command
+                .args(["--exact", FILTER, "--nocapture", "--test-threads=1"])
+                .env(CHILD, &area.0)
+                .env("AIOLM_HOME", area.0.join("aiolm home"));
+            let output = crate::procutil::capture_output_cancellable(
+                &mut command,
+                Duration::from_secs(45),
+                256 * 1024,
+                None,
+            )
+            .unwrap();
+            assert!(
+                output.status.success(),
+                "isolated verbatim preview fixture failed:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+            return;
+        }
+        let area = PathBuf::from(std::env::var_os(CHILD).unwrap());
+        let engine_dir = area.join("한글 엔진 dir");
+        fs::create_dir_all(&engine_dir).unwrap();
+        let engine = engine_dir.join("synthetic-engine.exe");
+        let model = engine_dir.join("한글 primary.gguf");
+        let mmproj = engine_dir.join("한글 mmproj.gguf");
+        let draft = engine_dir.join("한글 draft.gguf");
+        let mtp = engine_dir.join("한글 mtp.gguf");
+        for file in [&engine, &model, &mmproj, &draft, &mtp] {
+            fs::write(file, b"synthetic bytes").unwrap();
+        }
+        let engine_id = ProviderId::parse("custom.auto-fedcba9876543210").unwrap();
+        let runtime_id = "connection-fedcba9876543210".to_string();
+        let directory = registry::root().join(engine_id.as_str()).join(&runtime_id);
+        fs::create_dir_all(&directory).unwrap();
+        let spec_path = directory.join("connection.json");
+        let registration_path = directory.join("registration.json");
+        let helper = std::env::current_exe().unwrap();
+        let verbatim = |path: &Path| {
+            let text = path.to_string_lossy();
+            if text.starts_with(r"\\?\") {
+                text.into_owned()
+            } else {
+                format!(r"\\?\{text}")
+            }
+        };
+        let verbatim_model = verbatim(&model);
+        let verbatim_engine = verbatim(&engine);
+        let spec = ConnectionSpec {
+            version: 1,
+            engine_id,
+            runtime_id: runtime_id.clone(),
+            target: Target::Managed {
+                launch: registry::ProcessSpec {
+                    program: verbatim_engine.clone(),
+                    args: vec![
+                        "serve".into(),
+                        "--model".into(),
+                        "{model}".into(),
+                        "--port={port}".into(),
+                        "--host={host}".into(),
+                    ],
+                    env: BTreeMap::new(),
+                    working_directory: Some(verbatim(&engine_dir)),
+                },
+                artifacts: vec![],
+            },
+            model_path: verbatim_model.clone(),
+            upstream_model: None,
+            served_alias: Some("synthetic-model".into()),
+        };
+        fs::write(&spec_path, serde_json::to_vec(&spec).unwrap()).unwrap();
+        let mut manifest = manifest_for(&spec, &helper);
+        manifest.artifacts.push(verbatim_engine.clone());
+        fs::write(&registration_path, record_bytes(&manifest)).unwrap();
+
+        let clean_model = crate::verbatim_path::strip_windows_verbatim_prefix(model)
+            .to_string_lossy()
+            .into_owned();
+        let mut cfg = crate::config::AppConfig {
+            active_provider: engine_id.as_str().into(),
+            active_runtime: runtime_id.clone(),
+            active_model: clean_model.clone(),
+            port: 43125,
+            ..Default::default()
+        };
+        let root = registry::root();
+        let target = super::super::runtime_schema::help_target(&root, &cfg).unwrap();
+        let help = super::super::runtime_schema::manifest_help_command(&manifest, &target.request)
+            .unwrap();
+        let identity = help.identity(&AtomicBool::new(false)).unwrap();
+        let output = |text: &str| super::super::runtime_help::TextOutput {
+            text: text.into(),
+            clean_text: text.into(),
+            encoding: "utf-8".into(),
+            decoding_loss: false,
+            truncated: false,
+            read_error: None,
+            raw_bytes_base64: None,
+        };
+        let report = super::super::runtime_help::HelpReport {
+            identity,
+            scope: target.request.scope.clone(),
+            stdout: output("Options:\n  -m, --model PATH  model path\n  -p, --port PORT  listening port\n  --host HOST  bind address\n  --mmproj PATH  multimodal projector\n  --model-draft PATH  draft model\n"),
+            stderr: output(""),
+            exit_code: Some(0),
+            success: true,
+            cancelled: false,
+            timed_out: false,
+            error: None,
+            elapsed_ms: 1,
+        };
+        let schema = super::super::runtime_help_parse::parse_help_report(
+            &report,
+            super::super::runtime_options::SchemaBinding {
+                engine: engine_id.as_str().into(),
+                runtime: runtime_id.clone(),
+                fingerprint: report.identity.fingerprint.clone(),
+            },
+        )
+        .unwrap();
+        super::super::runtime_help_store::save_snapshot(
+            &root,
+            engine_id.as_str(),
+            &runtime_id,
+            &super::super::runtime_help_store::HelpSnapshot {
+                report: report.clone(),
+                schema,
+            },
+        )
+        .unwrap();
+        super::super::runtime_schema::accept(
+            &root,
+            &cfg,
+            &report.identity.fingerprint,
+            &target.request,
+        )
+        .unwrap();
+        let effective = super::super::runtime_schema::effective(&root, &cfg, true).unwrap();
+        let key_for = |flag: &str| {
+            effective
+                .schema
+                .options
+                .iter()
+                .find(|option| option.spellings.iter().any(|s| s.flag == flag))
+                .unwrap()
+                .key
+                .clone()
+        };
+        let mmproj_key = key_for("--mmproj");
+        let draft_key = key_for("--model-draft");
+        cfg.provider_options.insert(
+            engine_id.as_str().into(),
+            serde_json::json!({
+                mmproj_key: verbatim(&mmproj),
+                draft_key: verbatim(&draft),
+                "extra_args": [format!("--mtp-model={}", verbatim(&mtp))],
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+        let preview = super::super::command_preview(&cfg).unwrap();
+        let engine_argv = preview
+            .engine_argv
+            .expect("managed external engine preview");
+        assert!(
+            engine_argv
+                .iter()
+                .all(|arg| !arg.contains(r"\\?\") && !arg.contains('?')),
+            "{engine_argv:?}"
+        );
+        assert!(
+            preview
+                .argv
+                .iter()
+                .all(|arg| !arg.contains(r"\\?\") && !arg.contains('?')),
+            "{:?}",
+            preview.argv
+        );
+        assert!(
+            engine_argv
+                .windows(2)
+                .any(|pair| pair == ["--model", clean_model.as_str()]),
+            "{engine_argv:?}"
+        );
+        assert!(
+            engine_argv.windows(2).any(|pair| pair
+                == [
+                    "--mmproj",
+                    crate::verbatim_path::strip_windows_verbatim_prefix(mmproj.clone())
+                        .to_string_lossy()
+                        .as_ref()
+                ]),
+            "{engine_argv:?}"
+        );
+        assert!(
+            engine_argv.windows(2).any(|pair| pair
+                == [
+                    "--model-draft",
+                    crate::verbatim_path::strip_windows_verbatim_prefix(draft.clone())
+                        .to_string_lossy()
+                        .as_ref()
+                ]),
+            "{engine_argv:?}"
+        );
+        assert!(
+            engine_argv.contains(&format!(
+                "--mtp-model={}",
+                crate::verbatim_path::strip_windows_verbatim_prefix(mtp).to_string_lossy()
+            )),
+            "{engine_argv:?}"
+        );
     }
 }

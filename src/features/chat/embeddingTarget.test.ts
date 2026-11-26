@@ -20,6 +20,9 @@ describe('document embedding target', () => {
     ['org/encoder', 'org/encoder'],
     ['org/encoder-00005-of-00004.gguf', 'org/encoder-00005-of-00004.gguf'],
     ['org/encoder-00001-of-00004.bin', 'org/encoder-00001-of-00004.bin'],
+    ['org/encoder-0001-of-0004.gguf', 'org/encoder.gguf'],
+    ['C:\\models\\encoder-00001-of-00004.gguf', 'encoder.gguf'],
+    ['/models/encoder-0004-of-0004.safetensors', 'encoder.safetensors'],
   ])('groups embedding model labels without changing target model IDs: %s', (model, label) => {
     const target = session('candidate');
     target.engine = { ...target.engine!, embedding_model: model };

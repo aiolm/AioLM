@@ -110,6 +110,11 @@ fn read_store(store: &Path) -> Vec<PendingDownload> {
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default();
+    // Earlier versions stored the first part's file name; the screen names the
+    // whole split model.
+    for entry in &mut entries {
+        entry.label = crate::model_names::strip_shard_suffix(&entry.label);
+    }
     // Older snapshot records can recover their original commit from the
     // ownership manifest written before their first transfer. Never guess main.
     for entry in &mut entries {
@@ -519,6 +524,65 @@ mod tests {
         discard_in(&store, &first.id).unwrap();
         assert!(!part.exists());
         assert_eq!(list_in(&store).len(), 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn interrupted_downloads_strip_legacy_shard_suffixes_when_listed() {
+        let root =
+            std::env::temp_dir().join(format!("aiolm-pending-label-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let store = root.join("pending-downloads.json");
+        let entries = [
+            PendingDownload::new(
+                ("owner/repo", &"a".repeat(40)),
+                Some("4bit/model-00001-of-00004.safetensors"),
+                true,
+                root.to_str().unwrap(),
+                false,
+                "4bit/model-00001-of-00004.safetensors",
+                vec![PendingFile {
+                    path: root
+                        .join("hf/owner/repo/4bit/model-00001-of-00004.safetensors")
+                        .to_string_lossy()
+                        .into_owned(),
+                    size: 4,
+                }],
+            ),
+            PendingDownload::new(
+                ("owner/gguf", &"b".repeat(40)),
+                Some("model-0001-of-0004.gguf"),
+                false,
+                root.to_str().unwrap(),
+                false,
+                "model-0001-of-0004.gguf",
+                vec![PendingFile {
+                    path: root
+                        .join("hf/owner/gguf/model-0001-of-0004.gguf")
+                        .to_string_lossy()
+                        .into_owned(),
+                    size: 4,
+                }],
+            ),
+        ];
+        std::fs::write(&store, serde_json::to_vec(&entries).unwrap()).unwrap();
+        let listed = list_in(&store);
+        assert_eq!(listed.len(), 2);
+        let safetensors = listed
+            .iter()
+            .find(|entry| entry.snapshot)
+            .expect("snapshot entry");
+        assert_eq!(safetensors.label, "4bit/model.safetensors");
+        assert_eq!(
+            safetensors.file_path.as_deref(),
+            Some("4bit/model-00001-of-00004.safetensors")
+        );
+        let gguf = listed
+            .iter()
+            .find(|entry| !entry.snapshot)
+            .expect("gguf entry");
+        assert_eq!(gguf.label, "model.gguf");
+        assert_eq!(gguf.file_path.as_deref(), Some("model-0001-of-0004.gguf"));
         std::fs::remove_dir_all(root).unwrap();
     }
 

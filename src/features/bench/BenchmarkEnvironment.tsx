@@ -1,22 +1,31 @@
-import { useId } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { AppConfig, DeviceReport, InstalledRuntime } from '../../shared/api/types';
 import { isNativeRuntimeAvailable } from '../../shared/api/transport';
+import type { CommandSyntax } from '../../shared/api/runtimeHelp';
+import { errorMessage } from '../../shared/api/errors';
 import type { ProfileApplication } from '../../shared/config/settingsProfiles';
 import { usesRuntimeDefault } from '../../shared/config/tuningDefaults';
 import { settingDefaultInfo } from '../../shared/config/defaultValueDisplay';
 import { useI18n } from '../../shared/i18n/i18n';
+import { modelActions } from '../../shared/i18n/modelActions';
 import { profileDisplayName } from '../../shared/i18n/profileNames';
+import { hostCommandLineSyntax } from '../../shared/lib/commandLine';
 import { normalizeDisplayText } from '../../shared/lib/displayPaths';
 import { formatBytes, formatCpuCores, formatMebibytes } from '../../shared/lib/units';
 import { runtimeVersionLabel } from '../../shared/runtime/installedRuntimes';
 import { runtimeGpuDevices } from '../../shared/runtime/sessionUtils';
 import { useServerOptions } from '../tuning/useServerOptions';
 import { benchmarkEnvironmentCopy } from './benchmarkEnvironmentCopy';
-import { providerOf, providerDisplayName } from '../../shared/api/providers';
+import { providerOf, providerDisplayName, providerCommandPreview, type CommandPreview } from '../../shared/api/providers';
 import { providerCopy } from '../../shared/i18n/providerCopy';
+import CommandLineViewer, { type CommandLineKind } from '../../shared/ui/CommandLineViewer';
+import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import RuntimeSelectionLabel from '../../shared/ui/RuntimeSelectionLabel';
+import { commandToolsCopy } from '../model-settings/commandToolsCopy';
 import RuntimeProfileValues from '../model-settings/RuntimeProfileValues';
 import { useProfileRuntimeSchema } from '../model-settings/useProfileRuntimeSchema';
+import { maskPreview } from '../runtimes/optionPresentation';
+import { sensitiveEntryTokenStrings } from '../runtimes/sensitiveEntryTokens';
 
 export function BenchmarkEnvironment({ config, application, device, runtimes, active, busy, onRuntimeVerified }: {
   config: AppConfig; application: ProfileApplication; device: DeviceReport | null;
@@ -28,9 +37,60 @@ export function BenchmarkEnvironment({ config, application, device, runtimes, ac
   const copy = benchmarkEnvironmentCopy[locale];
   const provider = providerOf(config);
   const llama = provider === 'llama.cpp';
+  const nativeAvailable = isNativeRuntimeAvailable();
   const runtime = useServerOptions(config.active_backend, config.active_build,
-    llama && active && !busy && !!config.active_backend && !!config.active_build && isNativeRuntimeAvailable());
+    llama && active && !busy && !!config.active_backend && !!config.active_build && nativeAvailable);
   const schema = useProfileRuntimeSchema(config, !llama && active && !busy);
+  const selectedRuntime = llama
+    ? (config.active_backend && config.active_build ? `${config.active_build}-${config.active_backend}` : '')
+    : (config.active_runtime ?? '');
+  const runtimeNeeded = !selectedRuntime;
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [rawPreview, setRawPreview] = useState<CommandPreview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState('');
+  const [previewRevision, setPreviewRevision] = useState(0);
+  const [commandKind, setCommandKind] = useState<CommandLineKind>('engine');
+  const [copySyntax, setCopySyntax] = useState<CommandSyntax>(hostCommandLineSyntax);
+  const [multiline, setMultiline] = useState(true);
+  const previewRequestRef = useRef(0);
+  useEffect(() => {
+    const request = ++previewRequestRef.current;
+    if (!previewOpen || !active || !nativeAvailable || runtimeNeeded) {
+      setRawPreview(null);
+      setPreviewError('');
+      setPreviewLoading(false);
+      return;
+    }
+    setPreviewLoading(true);
+    setPreviewError('');
+    setRawPreview(null);
+    void providerCommandPreview(config).then(result => {
+      if (previewRequestRef.current !== request) return;
+      setRawPreview(result);
+      setPreviewError('');
+    }).catch(cause => {
+      if (previewRequestRef.current !== request) return;
+      setRawPreview(null);
+      setPreviewError(normalizeDisplayText(errorMessage(cause)));
+    }).finally(() => {
+      if (previewRequestRef.current === request) setPreviewLoading(false);
+    });
+    return () => { previewRequestRef.current += 1; };
+  }, [previewOpen, active, nativeAvailable, runtimeNeeded, config, previewRevision]);
+  const waitingForMaskSchema = !llama && schema.pending && !schema.error;
+  const maskedPreview = rawPreview && !waitingForMaskSchema ? (() => {
+    const view = schema.view;
+    if (!view) return rawPreview;
+    const providerValues = config.provider_options?.[provider] ?? {};
+    const entrySecrets = sensitiveEntryTokenStrings(view);
+    const mask = (argv: string[]) => maskPreview(argv, view.schema, providerValues, entrySecrets);
+    return {
+      ...rawPreview,
+      argv: mask(rawPreview.argv),
+      engine_argv: rawPreview.engine_argv && mask(rawPreview.engine_argv),
+    };
+  })() : null;
   const profile = config.settings_profiles?.entries.find(entry => entry.id === application.profile_id);
   const profileName = profile ? profileDisplayName(profile, locale) : application.profile_name || copy.unknown;
   const value = (key: 'ngl' | 'threads' | 'batch_size' | 'ubatch_size' | 'cache_type_k' | 'cache_type_v' | 'flash_attn') => {
@@ -107,5 +167,43 @@ export function BenchmarkEnvironment({ config, application, device, runtimes, ac
         </dl>
       </div>
     </details>
+    {nativeAvailable && (
+      <details className="performance-environment-disclosure" open={previewOpen} onToggle={event => setPreviewOpen(event.currentTarget.open)}>
+        <summary>{providerCopy[locale].preview}</summary>
+        <div className="performance-environment-disclosure-body">
+          {runtimeNeeded ? (
+            <p className="app-section-hint">{providerCopy[locale].choose}</p>
+          ) : (previewLoading || waitingForMaskSchema) && !maskedPreview ? (
+            <p role="status" className="app-section-hint">{providerCopy[locale].loading}</p>
+          ) : previewError ? (
+            <FeedbackBanner
+              tone="error"
+              action={{
+                label: modelActions(locale).retry,
+                disabled: previewLoading || busy,
+                onClick: () => setPreviewRevision(value => value + 1),
+              }}
+            >
+              {previewError}
+            </FeedbackBanner>
+          ) : maskedPreview ? (
+            <CommandLineViewer
+              argv={maskedPreview.argv}
+              engineArgv={maskedPreview.engine_argv}
+              blocked={maskedPreview.launch_blocked}
+              context="preview"
+              framed={false}
+              labels={commandToolsCopy[locale]}
+              commandKind={commandKind}
+              onCommandKindChange={setCommandKind}
+              syntax={copySyntax}
+              onSyntaxChange={setCopySyntax}
+              multiline={multiline}
+              onMultilineChange={setMultiline}
+            />
+          ) : null}
+        </div>
+      </details>
+    )}
   </section>;
 }

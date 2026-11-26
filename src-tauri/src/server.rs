@@ -765,7 +765,7 @@ pub fn build_args_with_gpu(
 ) -> Vec<String> {
     let mut args = vec![
         "--model".into(),
-        cfg.active_model.clone(),
+        crate::verbatim_path::strip_windows_verbatim_prefix_str(&cfg.active_model).into_owned(),
         "--host".into(),
         "127.0.0.1".into(),
         "--port".into(),
@@ -811,7 +811,9 @@ pub fn build_args_with_gpu(
     }
     if !cfg.mmproj.trim().is_empty() {
         args.push("--mmproj".into());
-        args.push(cfg.mmproj.clone());
+        args.push(
+            crate::verbatim_path::strip_windows_verbatim_prefix_str(&cfg.mmproj).into_owned(),
+        );
     }
     if cfg.parallel > 0 {
         args.push("--parallel".into());
@@ -829,7 +831,9 @@ pub fn build_args_with_gpu(
         .lora_adapters
         .iter()
         .filter(|adapter| adapter.enabled && (adapter.scale - 1.0).abs() < f32::EPSILON)
-        .map(|adapter| adapter.path.clone())
+        .map(|adapter| {
+            crate::verbatim_path::strip_windows_verbatim_prefix_str(&adapter.path).into_owned()
+        })
         .collect::<Vec<_>>();
     if !lora_plain.is_empty() {
         args.push("--lora".into());
@@ -839,7 +843,13 @@ pub fn build_args_with_gpu(
         .lora_adapters
         .iter()
         .filter(|adapter| adapter.enabled && (adapter.scale - 1.0).abs() >= f32::EPSILON)
-        .map(|adapter| format!("{}:{}", adapter.path, adapter.scale))
+        .map(|adapter| {
+            format!(
+                "{}:{}",
+                crate::verbatim_path::strip_windows_verbatim_prefix_str(&adapter.path),
+                adapter.scale
+            )
+        })
         .collect::<Vec<_>>();
     if !lora_scaled.is_empty() {
         args.push("--lora-scaled".into());
@@ -890,7 +900,10 @@ pub fn build_args_with_gpu(
         }
         if !cfg.spec_draft_model.trim().is_empty() {
             args.push("--spec-draft-model".into());
-            args.push(cfg.spec_draft_model.clone());
+            args.push(
+                crate::verbatim_path::strip_windows_verbatim_prefix_str(&cfg.spec_draft_model)
+                    .into_owned(),
+            );
         }
     }
     if cfg.reasoning != "auto" {
@@ -962,7 +975,9 @@ fn append_unmanaged_server_args(output: &mut Vec<String>, raw: &[String]) {
                 index += 1;
             }
         } else {
-            output.push(argument.clone());
+            output.push(
+                crate::verbatim_path::strip_windows_verbatim_prefix_arg(argument).into_owned(),
+            );
         }
         index += 1;
     }
@@ -2805,5 +2820,58 @@ mod tests {
         for (actual, expected) in observations {
             assert_eq!(actual, expected);
         }
+    }
+
+    #[test]
+    fn build_args_strips_windows_verbatim_prefixes_while_preserving_unicode_and_unc() {
+        let cfg = AppConfig {
+            active_model: r"\\?\C:\한글 모델\primary dir\model.gguf".into(),
+            mmproj: r"\\?\UNC\server\share\한글 폴더\mmproj.gguf".into(),
+            spec_type: "draft".into(),
+            spec_draft_model: r"\\?\C:\한글 모델\draft dir\draft.gguf".into(),
+            lora_adapters: vec![
+                crate::config::LoraAdapterConfig {
+                    path: r"\\?\C:\한글 모델\lora plain.gguf".into(),
+                    scale: 1.0,
+                    enabled: true,
+                },
+                crate::config::LoraAdapterConfig {
+                    path: r"\\?\UNC\server\share\lora scaled.gguf".into(),
+                    scale: 0.5,
+                    enabled: true,
+                },
+            ],
+            server_args: vec![
+                "--chat-template-file".into(),
+                r"\\?\C:\한글 템플릿\template.jinja".into(),
+                r"--mtp-model=\\?\UNC\server\share\mtp.gguf".into(),
+            ],
+            ..Default::default()
+        };
+        let args = build_args(&cfg, "");
+        assert!(
+            args.iter()
+                .all(|arg| !arg.contains(r"\\?\") && !arg.contains('?')),
+            "verbatim prefix or '?' leaked into llama-server args: {args:?}"
+        );
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--model", r"C:\한글 모델\primary dir\model.gguf"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--mmproj", r"\\server\share\한글 폴더\mmproj.gguf"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--spec-draft-model", r"C:\한글 모델\draft dir\draft.gguf"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--lora", r"C:\한글 모델\lora plain.gguf"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--lora-scaled", r"\\server\share\lora scaled.gguf:0.5"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--chat-template-file", r"C:\한글 템플릿\template.jinja"]));
+        assert!(args.contains(&r"--mtp-model=\\server\share\mtp.gguf".into()));
     }
 }

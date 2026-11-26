@@ -56,26 +56,38 @@ impl ModelSource {
             } else {
                 None
             };
-            match state.lifecycle {
-                Lifecycle::Ready if !state.url.is_empty() && !state.api_key.is_empty() => {
-                    let model_id = file_name(&state.model)
-                        .filter(|name| !name.is_empty())
-                        .unwrap_or(&session_id)
-                        .to_string();
-                    ready.push(Candidate {
-                        url: state.url.clone(),
-                        key: state.api_key.clone(),
-                        advertised: model_id.clone(),
-                        model_id,
-                        session_id,
-                        target: target.clone(),
-                    });
+            // The model is read, and its label resolved from disk, only after
+            // the session lock is released.
+            let ready_model = match state.lifecycle {
+                Lifecycle::Ready if !state.url.is_empty() && !state.api_key.is_empty() => Some((
+                    state.url.clone(),
+                    state.api_key.clone(),
+                    state.model.clone(),
+                )),
+                Lifecycle::Starting => {
+                    loading += 1;
+                    None
                 }
-                Lifecycle::Starting => loading += 1,
-                _ => {}
-            }
+                _ => None,
+            };
             drop(state);
             drop(teardown);
+            if let Some((url, key, model)) = ready_model {
+                let resolved = crate::model_names::resolve_display_name(&model);
+                let model_id = if resolved.is_empty() {
+                    session_id.clone()
+                } else {
+                    resolved
+                };
+                ready.push(Candidate {
+                    url,
+                    key,
+                    advertised: model_id.clone(),
+                    model_id,
+                    session_id,
+                    target: target.clone(),
+                });
+            }
         }
         ready.sort_by(|a, b| (&a.model_id, &a.session_id).cmp(&(&b.model_id, &b.session_id)));
         // Two sessions serving the same file must stay individually
@@ -138,13 +150,10 @@ fn lock(target: &Mutex<ServerState>) -> MutexGuard<'_, ServerState> {
     target.lock().unwrap_or_else(|error| error.into_inner())
 }
 
-fn file_name(path: &str) -> Option<&str> {
-    path.rsplit(['/', '\\']).next()
-}
-
 pub(super) struct Candidate {
     pub session_id: String,
-    /// File name of the loaded model.
+    /// Display name of the loaded model: no directory, revision hash or
+    /// split-part suffix.
     pub model_id: String,
     /// The id `GET /v1/models` lists; unique among ready sessions.
     pub advertised: String,
@@ -428,10 +437,67 @@ mod tests {
     }
 
     #[test]
-    fn model_ids_are_file_names_from_either_path_style() {
-        assert_eq!(file_name("C:\\models\\qwen.gguf"), Some("qwen.gguf"));
-        assert_eq!(file_name("/home/u/models/qwen.gguf"), Some("qwen.gguf"));
-        assert_eq!(file_name("qwen.gguf"), Some("qwen.gguf"));
+    fn model_ids_are_display_names_from_either_path_style() {
+        use crate::model_names::display_name;
+        assert_eq!(display_name("C:\\models\\qwen.gguf"), "qwen.gguf");
+        assert_eq!(display_name("/home/u/models/qwen.gguf"), "qwen.gguf");
+        assert_eq!(display_name("qwen.gguf"), "qwen.gguf");
+    }
+
+    #[test]
+    fn split_models_and_snapshots_are_advertised_by_display_name() {
+        let (source, default, sessions) = source();
+        ready(
+            &default,
+            "http://127.0.0.1:1/v1",
+            "key-d",
+            "C:\\models\\qwen-00001-of-00004.gguf",
+        );
+        add_named(&sessions, "s1", "/models/llama-0001-of-0003.gguf");
+        let revision = "a".repeat(40);
+        add_named(
+            &sessions,
+            "s2",
+            &format!("/models/hf/owner/gemma/snapshots/{revision}"),
+        );
+        let ids: Vec<String> = source
+            .snapshot()
+            .ready
+            .iter()
+            .map(|candidate| candidate.advertised.clone())
+            .collect();
+        assert_eq!(ids, ["gemma", "llama.gguf", "qwen.gguf"]);
+        assert_eq!(resolved(&source, Some("qwen.gguf")), Ok("default".into()));
+        assert_eq!(resolved(&source, Some("llama.gguf")), Ok("s1".into()));
+        assert_eq!(resolved(&source, Some("gemma")), Ok("s2".into()));
+        // The raw part name is not advertised.
+        assert_eq!(
+            resolved(&source, Some("qwen-00001-of-00004.gguf")),
+            Err("model_not_found".into())
+        );
+    }
+
+    #[test]
+    fn a_split_model_loaded_twice_is_disambiguated_by_session() {
+        let (source, default, sessions) = source();
+        ready(
+            &default,
+            "http://127.0.0.1:1/v1",
+            "key-d",
+            "/a/qwen-00001-of-00002.gguf",
+        );
+        add_named(&sessions, "s1", "/b/qwen-0001-of-0002.gguf");
+        let ids: Vec<String> = source
+            .snapshot()
+            .ready
+            .iter()
+            .map(|candidate| candidate.advertised.clone())
+            .collect();
+        assert_eq!(ids, ["qwen.gguf@default", "qwen.gguf@s1"]);
+        assert_eq!(
+            resolved(&source, Some("qwen.gguf")),
+            Err("ambiguous_model".into())
+        );
     }
 
     #[test]

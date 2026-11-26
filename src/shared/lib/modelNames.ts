@@ -1,6 +1,6 @@
 import { snapshotModelName } from '../api/providers';
 import { isNativeRuntimeAvailable } from '../api/transport';
-import { modelDisplayName, normalizeDisplayPath } from './displayPaths';
+import { modelDisplayName, normalizeDisplayPath, stripModelShardSuffix } from './displayPaths';
 
 const pending = new Map<string, Promise<string | undefined>>();
 
@@ -14,7 +14,7 @@ function readName(path: string, opaqueFallback: boolean): Promise<string | undef
   const found = pending.get(path);
   if (found) return found;
   const read = Promise.resolve().then(() => snapshotModelName(path)).then(label => {
-    const name = label && (label.selected || opaqueFallback) ? label.name.trim() : undefined;
+    const name = label && (label.selected || opaqueFallback) ? stripModelShardSuffix(label.name.trim()) : undefined;
     return name && !/^[a-f0-9]{40}$/i.test(name) ? name : undefined;
   }).catch(() => undefined).finally(() => {
     if (pending.get(path) === read) pending.delete(path);

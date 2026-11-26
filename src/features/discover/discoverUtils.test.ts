@@ -30,6 +30,20 @@ describe('GGUF download choices', () => {
     const part = file('model-00002-of-00002.gguf');
     expect(groupHfFiles([part, part])[0]).toMatchObject({ sizeBytes: 10, file: { path: 'model-00001-of-00002.gguf' } });
   });
+
+  it('groups four-digit parts with their own width and keeps them apart from five-digit sets', () => {
+    const groups = groupHfFiles([
+      file('Q4/model-0002-of-0002.gguf'), file('Q4/model-0001-of-0002.gguf'), file('Q4/model-00001-of-00002.gguf'),
+    ]);
+    expect(groups.map(group => [group.file.path, group.displayPath, group.files.length])).toEqual([
+      ['Q4/model-0001-of-0002.gguf', 'Q4/model.gguf', 2],
+      ['Q4/model-00001-of-00002.gguf', 'Q4/model.gguf', 1],
+    ]);
+    expect(shardTotal('Q4/model-0001-of-0002.gguf')).toBe(2);
+    expect(firstShard('Q4/model-0002-of-0002.gguf')).toBe('Q4/model-0001-of-0002.gguf');
+    const marked = markInstalled({}, 'Q4/model-0001-of-0002.gguf', 'models/Q4/model-0001-of-0002.gguf', 10);
+    expect(defined(marked['Q4/model-0001-of-0002.gguf']).missing_shards).toEqual(['model-0002-of-0002.gguf']);
+  });
 });
 
 describe('downloaded GGUF shard installation marks', () => {
@@ -110,5 +124,14 @@ describe('Safetensors download choices', () => {
     expect(groupSafetensorsFiles([file('model-00002-of-00002.safetensors')])[0]).toMatchObject({
       file: { path: 'model-00001-of-00002.safetensors' }, shardCount: 2, missingParts: 1,
     });
+  });
+
+  it('groups four-digit split weights under their original width', () => {
+    const second = file('4bit/model-0002-of-0002.safetensors', 2048);
+    expect(groupSafetensorsFiles([second, file('4bit/model-0001-of-0002.safetensors')])).toEqual([{
+      file: file('4bit/model-0001-of-0002.safetensors'),
+      files: [file('4bit/model-0001-of-0002.safetensors'), second],
+      displayPath: '4bit/model.safetensors', sizeBytes: 3072, shardCount: 2, missingParts: 0,
+    }]);
   });
 });

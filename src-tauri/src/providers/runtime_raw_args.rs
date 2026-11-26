@@ -68,7 +68,7 @@ pub(crate) fn validated(
                 return Err(format!("{flag} is duplicated in additional arguments"));
             }
         }
-        result.push(token.to_owned());
+        result.push(crate::verbatim_path::strip_windows_verbatim_prefix_arg(token).into_owned());
     }
     Ok(result)
 }
@@ -103,6 +103,29 @@ mod tests {
                 "--experimental-cache",
                 "path with spaces/{model}",
                 "--offset=-4"
+            ]
+        );
+    }
+
+    #[test]
+    fn strips_windows_verbatim_prefixes_in_extra_args_tokens_and_equals_flags() {
+        let values = json!({
+            "extra_args": [
+                "--mmproj",
+                r"\\?\C:\한글 모델\mmproj dir\mmproj.gguf",
+                r"--draft-model=\\?\UNC\server\share\한글 폴더\draft.gguf",
+                "--mtp-model",
+                r"\\?\unc\nas\models\mtp.gguf",
+            ]
+        });
+        assert_eq!(
+            validated(&schema(), &BTreeMap::new(), values.as_object().unwrap()).unwrap(),
+            [
+                "--mmproj",
+                r"C:\한글 모델\mmproj dir\mmproj.gguf",
+                r"--draft-model=\\server\share\한글 폴더\draft.gguf",
+                "--mtp-model",
+                r"\\nas\models\mtp.gguf",
             ]
         );
     }

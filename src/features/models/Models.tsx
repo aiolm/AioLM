@@ -1,7 +1,7 @@
 import * as api from "../../shared/api/index";
 import { modelActions } from '../../shared/i18n/modelActions';
 import { providerCopy } from '../../shared/i18n/providerCopy';
-import { normalizeDisplayPath,normalizeDisplayText } from "../../shared/lib/displayPaths";
+import { formatModelLabel, normalizeDisplayPath,normalizeDisplayText } from "../../shared/lib/displayPaths";
 import { isServerRunning } from "../../shared/lib/serverLifecycle";
 import { formatMebibytes } from '../../shared/lib/units';
 import { runSetupGapMessage } from '../../shared/runtime/runReadiness';
@@ -35,6 +35,8 @@ export default function ModelsPanel(props: ModelsPanelProps) {
   const { store, onSelectModel, onDiscoverModels, compact = false, active = true, children } = props;
   const { t, locale, copy, cfg, models, updateCatalog, scanning, scanError, scanTruncated, modelQuery, setModelQuery, modelSort, setModelSort, modelFilterInput, providerFilter, setProviderFilter, dir, folderSaved, setFolderSaved, folderAction, folderError, setFolderError, setScanRequest, showVision, setShowVision, flash, notify, dismissFlash, pendingConfirm, setPendingConfirm, updatesCopy, sessionsReady, updateBlocked, modelUpdates, cancelScan, visible, onlyHiddenVision, hasModelFilters, clearModelFilters, liveModel, serverRunning, memoryLine, lifecycle, lifecycleLine, runtimeGap, modelUsage, selectModel, setProjector, browse, selectAndStart, copyPath, removeModel, modelSettings } = useModelsController(props);
   const sortCopy = modelSortCopy[locale];
+  // Catalog names are already labels; only a model outside the catalog is resolved from its path.
+  const liveCatalogName = models?.find((model) => model.path === liveModel)?.name;
   return (
     <div className={`app-page-scroll models-panel relative flex h-full min-h-0 min-w-0 flex-col${compact ? ' models-panel--compact' : ''}`} data-testid="models-scroll-region">
       <header className="app-page-header"><div><h1 className="app-page-title">{t("section.library")}</h1>{compact && <p className="app-page-description">{copy.hint}</p>}</div></header>
@@ -79,7 +81,7 @@ export default function ModelsPanel(props: ModelsPanelProps) {
           <div className="min-w-0 flex-1">
             <div className="app-eyebrow">{isServerRunning(store.status.state) ? copy.running : store.status.state === 'starting' ? copy.starting : copy.stopping}</div>
             <TuningOptionMetadata fieldKey="raw-server:--model" />
-            {liveModel && <div className="app-text-wrap text-base font-semibold ui-color-ink" title={normalizeDisplayPath(liveModel)}>{<ModelName model={models?.find((model) => model.path === liveModel)?.name ?? liveModel} />}</div>}
+            {liveModel && <div className="app-text-wrap text-base font-semibold ui-color-ink" title={normalizeDisplayPath(liveModel)}>{liveCatalogName !== undefined ? formatModelLabel(liveCatalogName) : <ModelName model={liveModel} />}</div>}
             {/* Memory and slot status of the running model is what this card is for, so it starts expanded. */}
             <details className="models-runtime-details mt-1" open>
             <summary>{t("section.diagnostics")}</summary>
@@ -184,7 +186,7 @@ export default function ModelsPanel(props: ModelsPanelProps) {
                 action={{ label: t("ui.modelsClearFilters"), onClick: clearModelFilters }} />
         )}
         {visible.map((model) => {
-          const displayName = normalizeDisplayText(model.name);
+          const displayName = formatModelLabel(model.name);
           const incomplete = !!model.shards?.missing.length;
           const usage = modelUsage(model);
           const running = usage === 'running';

@@ -6,7 +6,7 @@ import {
 import { pickRuntimePath } from '../../shared/api/runtimeHelp';
 import { useI18n } from '../../shared/i18n/i18n';
 import { runtimeAutoCopy } from '../../shared/i18n/runtimeAutoCopy';
-import { normalizeDisplayText, stripModelShardSuffix } from '../../shared/lib/displayPaths';
+import { formatModelLabel, normalizeDisplayText } from '../../shared/lib/displayPaths';
 import { finishTask, registerTask, updateTask } from '../../shared/state/taskRegistry';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
 import DiagnosticDetails, { summarizeDiagnostic } from '../../shared/ui/DiagnosticDetails';
@@ -248,7 +248,7 @@ export default function AutomaticRuntimeConnection({ locked, onConnected, onBusy
       <div className="runtime-auto-field">
         <label htmlFor={`${id}-model`}>{copy.model}</label>
         <CustomSelect id={`${id}-model`} value={model} disabled={disabled || prepared.models.length === 0}
-          options={[{ value: '', label: copy.chooseModel }, ...prepared.models.map(item => ({ value: item.id, label: stripModelShardSuffix(item.name) }))]}
+          options={[{ value: '', label: copy.chooseModel }, ...prepared.models.map(item => ({ value: item.id, label: formatModelLabel(item.name) }))]}
           onChange={setModel} />
       </div>
       {prepared.models.length === 0 && <FeedbackBanner tone="warning">{copy.noModels}</FeedbackBanner>}

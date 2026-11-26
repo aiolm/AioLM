@@ -249,20 +249,6 @@ export function setOccurrenceSpelling(schema: OptionSchema, values: Record<strin
   }));
 }
 
-/** Move one occurrence of the saved plan up or down. */
-export function moveOccurrence(schema: OptionSchema, values: Record<string, unknown>, index: number, offset: -1 | 1): Record<string, unknown> {
-  const state = readOrder(values);
-  if (!state.ok) return values;
-  const plan = expandPlan(schema, values, state.order);
-  const target = index + offset;
-  if (index < 0 || target < 0 || index >= plan.length || target >= plan.length) return values;
-  const source = plan[index];
-  const destination = plan[target];
-  if (!source || !destination) return values;
-  [plan[index], plan[target]] = [destination, source];
-  return writePlan(schema, values, plan);
-}
-
 /** The native integer can exceed the exact range of the editor's numbers. */
 export class ImportedIntegerPrecisionError extends Error {
   constructor() { super(runtimeOptionsCopy.en.importIntegerPrecision); }

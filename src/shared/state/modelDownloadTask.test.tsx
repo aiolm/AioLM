@@ -43,3 +43,18 @@ it('tracks concurrent downloads independently by download_id', async () => {
   expect(getTaskSnapshot().find(task => task.id === modelDownloadTaskId('dl-1'))?.state).toBe('cancelled');
   expect(getTaskSnapshot().find(task => task.id === modelDownloadTaskId('dl-2'))?.state).toBe('running');
 });
+
+it('formats shard-suffixed file paths into unified download task labels', async () => {
+  let progress!: (value: api.ModelDownloadProgress) => void;
+  vi.mocked(api.onModelDownloadProgress).mockImplementation(async listener => { progress = listener; return () => undefined; });
+  renderHook(() => useModelDownloadTask());
+  await waitFor(() => expect(progress).toBeDefined());
+
+  act(() => {
+    progress({ download_id: 'dl-st', repo_id: 'owner/repo', file_path: '4bit/model-00001-of-00004.safetensors', phase: 'downloading', received: 10, total: 100 });
+    progress({ download_id: 'dl-4d', repo_id: 'owner/repo', file_path: 'model-0001-of-0004.gguf', phase: 'downloading', received: 20, total: 100 });
+  });
+
+  expect(getTaskSnapshot().find(task => task.id === modelDownloadTaskId('dl-st'))?.label).toBe('4bit/model.safetensors');
+  expect(getTaskSnapshot().find(task => task.id === modelDownloadTaskId('dl-4d'))?.label).toBe('model.gguf');
+});

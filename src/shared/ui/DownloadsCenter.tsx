@@ -1,7 +1,11 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { shouldConfirmDestructive } from "../config/preferences";
 import { useI18n } from "../i18n/i18n";
-import { normalizeDisplayText } from "../lib/displayPaths";
+import { formatModelLabel, normalizeDisplayText } from "../lib/displayPaths";
+
+/** Model downloads name the model once, without split-part suffixes or local paths; other tasks keep their titles. */
+const taskName = (task: { kind: string; label: string }) =>
+  task.kind === "model-download" ? formatModelLabel(task.label) : normalizeDisplayText(task.label);
 import { formatBytes } from "../lib/units";
 import { isDownloadTaskActive } from "../state/modelDownloadTask";
 import {
@@ -287,7 +291,7 @@ export default function DownloadsCenter({
                 {active.map((task) => {
                   const pct = downloadTaskPercent(task);
                   const transfer = transferLabel(task, (time) => t("ui.timeRemaining", { time }));
-                  const displayLabel = normalizeDisplayText(task.label);
+                  const displayLabel = taskName(task);
                   const meta = task.repoId || (task.detail ? normalizeDisplayText(task.detail) : "");
                   const stopLabel = task.pausable ? t("ui.downloadPause") : t("common.cancel");
                   return (
@@ -337,7 +341,7 @@ export default function DownloadsCenter({
                 {paused.map((entry) => {
                   const pct = pendingPercent(entry);
                   const busy = pendingStore.discardingIds.has(entry.id) || pendingStore.resumingIds.has(entry.id);
-                  const name = normalizeDisplayText(entry.label || entry.repo_id);
+                  const name = formatModelLabel(entry.label || entry.repo_id);
                   return (
                     <div
                       key={entry.id}
@@ -387,7 +391,7 @@ export default function DownloadsCenter({
               <div className="aiolm-center-group">
                 <h3 className="aiolm-center-group__title">{copy.failedSection}</h3>
                 {failed.map((task) => {
-                  const name = normalizeDisplayText(task.label);
+                  const name = taskName(task);
                   const detail = task.detail ? normalizeDisplayText(task.detail) : "";
                   return (
                     <div
@@ -430,7 +434,7 @@ export default function DownloadsCenter({
                     <div className="aiolm-center-item__top">
                       <div className="aiolm-center-item__identity">
                         <span className="aiolm-center-item__name">
-                          {normalizeDisplayText(record.label)}
+                          {formatModelLabel(record.label)}
                         </span>
                         <span className="aiolm-center-item__meta">{record.repoId}</span>
                       </div>
@@ -448,7 +452,7 @@ export default function DownloadsCenter({
                           </button>
                         )}
                         <DismissButton
-                          label={`${t("ui.taskDismiss")}: ${normalizeDisplayText(record.label)}`}
+                          label={`${t("ui.taskDismiss")}: ${formatModelLabel(record.label)}`}
                           onClick={() => dismissCompletedDownload(record.id)}
                         />
                       </div>
@@ -456,7 +460,7 @@ export default function DownloadsCenter({
                   </div>
                 ))}
                 {unmatchedCompletedTasks.map((task) => {
-                  const name = normalizeDisplayText(task.label);
+                  const name = taskName(task);
                   return (
                     <div
                       key={task.id}
@@ -480,7 +484,7 @@ export default function DownloadsCenter({
         open={pendingDiscard !== null}
         title={t("ui.pendingDiscardTitle")}
         description={t("ui.pendingDiscardBody", {
-          file: normalizeDisplayText(pendingDiscard?.label ?? ""),
+          file: formatModelLabel(pendingDiscard?.label ?? ""),
         })}
         confirmLabel={t("ui.pendingDiscard")}
         cancelLabel={t("common.cancel")}

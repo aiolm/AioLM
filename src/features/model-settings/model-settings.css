@@ -151,7 +151,15 @@
 .model-settings-paste > label { color: var(--ui-ink); font-size: var(--ui-text-support); font-weight: 600; }
 .model-settings-paste > .app-section-hint { margin: 0; }
 .model-settings-paste-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
-.model-settings-command-import { display: grid; gap: 12px; padding: 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); }
+.model-settings-command-tools { display: grid; gap: 10px; min-width: 0; }
+.model-settings-command-import { display: grid; gap: 8px; min-width: 0; padding: 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); background: var(--ui-panel); }
+.model-settings-command-import .app-section-hint { margin: 0; }
+.model-settings-command-title { color: var(--ui-ink); font-weight: 600; }
+.model-settings-command-bar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; min-width: 0; }
+.model-settings-command-preview-section { display: grid; gap: 8px; min-width: 0; }
+.model-settings-command-preview-trigger { margin: 0; }
+.model-settings-command-select { flex: 0 1 13rem; min-inline-size: min(100%, 10rem); }
+.model-settings-command-select > span { color: var(--ui-muted); font-size: var(--ui-text-caption); font-weight: 500; }
 .model-settings-tools { min-width: 0; padding: 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); }
 .model-settings-tools > summary { color: var(--ui-ink); font-size: var(--ui-text-support); font-weight: 600; cursor: pointer; }
 .model-settings-tools[open] > summary { margin-bottom: 12px; }
@@ -213,6 +221,7 @@
   .model-settings-lora { grid-template-columns: auto minmax(0, 1fr); }
   .model-settings-lora > strong { grid-column: 1 / -1; }
   .model-settings-lora > .app-button--danger { grid-column: 1 / -1; justify-self: end; }
+  .model-settings-command-select { flex: 1 1 100%; max-inline-size: none; }
   /* One scrollable tab row leaves room for the profile and fields. Individual
      labels keep their full width; keyboard focus reveals an offscreen tab. */
   .model-settings-layout { display: flex; flex-direction: column; }

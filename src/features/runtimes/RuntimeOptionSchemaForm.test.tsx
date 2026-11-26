@@ -536,18 +536,10 @@ describe('saved command-line order and confirmed syntax in the form', () => {
     '@option_order': { version: 1, occurrences: [{ key: 'alpha' }, { key: 'beta' }, { key: 'alpha', spelling: '-a' }] },
   };
 
-  it('reorders occurrences and gives one occurrence its own alias', () => {
+  it('gives one occurrence of a saved order its own alias without reorder buttons', () => {
     const onChange = vi.fn();
     render(<I18nProvider initialLocale="en"><RuntimeOptionSchemaForm schema={schema([alpha(), textOption('beta')])} values={ordered} scope={[]} onChange={onChange} /></I18nProvider>);
-    expect(screen.getAllByRole('listitem').map(item => item.querySelector('code')?.textContent)).toEqual(['--alpha "1"', '--beta "2"', '-a "3"']);
-    fireEvent.click(screen.getByRole('button', { name: 'Move up: --beta "2"' }));
-    expect(onChange).toHaveBeenLastCalledWith({
-      alpha: { spelling: null, occurrences: [['1'], ['3']] }, beta: '2',
-      '@option_order': { version: 1, occurrences: [{ key: 'beta' }, { key: 'alpha' }, { key: 'alpha', spelling: '-a' }] },
-    });
-    // An edge button stays focusable and does nothing.
-    fireEvent.click(screen.getByRole('button', { name: 'Move up: --alpha "1"' }));
-    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: /^Move (up|down)/ })).not.toBeInTheDocument();
     expect(screen.getByRole('combobox', { name: '--alpha Occurrence 2 Spelling' })).toHaveTextContent('-a');
     fireEvent.click(screen.getByRole('combobox', { name: '--alpha Occurrence 2 Spelling' }));
     fireEvent.click(screen.getByRole('option', { name: '--alpha' }));

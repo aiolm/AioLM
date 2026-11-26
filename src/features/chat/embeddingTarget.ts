@@ -1,5 +1,5 @@
 import type { SessionStatus } from '../../shared/api/types';
-import { stripModelShardSuffix } from '../../shared/lib/displayPaths';
+import { formatModelLabel } from '../../shared/lib/displayPaths';
 import { isServerRunning } from '../../shared/lib/serverLifecycle';
 
 export function embeddingSessions(sessions: SessionStatus[]): SessionStatus[] {
@@ -8,7 +8,7 @@ export function embeddingSessions(sessions: SessionStatus[]): SessionStatus[] {
 
 export function embeddingSessionLabel(session: SessionStatus): string {
   const name = session.name || session.id;
-  const label = `${name} · ${stripModelShardSuffix(session.engine?.embedding_model ?? session.model ?? '')}`;
+  const label = `${name} · ${formatModelLabel(session.engine?.embedding_model ?? session.model ?? '')}`;
   return name === session.id ? label : `${label} · ${session.id}`;
 }
 

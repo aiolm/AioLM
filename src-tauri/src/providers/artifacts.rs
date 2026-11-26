@@ -451,7 +451,7 @@ pub fn metal_gguf_problem(artifact: &ModelArtifact) -> Option<String> {
         if path
             .file_name()
             .and_then(|name| name.to_str())
-            .is_some_and(|name| crate::models::shard_name(name).is_some())
+            .is_some_and(|name| crate::model_names::parse_gguf_shard(name).is_some())
         {
             return Err(
                 "vllm-metal does not load sharded GGUF files; merge the shards first".into(),
@@ -782,33 +782,16 @@ pub(crate) fn inspect_safetensors_metadata(
 fn missing_split_parts(present: &[String], missing: &mut Vec<String>) {
     let mut checked = BTreeSet::new();
     for name in present {
-        let Some((prefix, total)) = name
-            .strip_suffix(".safetensors")
-            .and_then(|stem| stem.rsplit_once("-of-"))
-        else {
+        let Some(parts) = crate::model_names::parse_safetensors_shard_raw(name) else {
             continue;
         };
-        let Some((base, part)) = prefix.rsplit_once('-') else {
-            continue;
-        };
-        if part.len() != 5
-            || total.len() != 5
-            || !part
-                .bytes()
-                .chain(total.bytes())
-                .all(|byte| byte.is_ascii_digit())
-        {
-            continue;
-        }
-        let part = part.parse::<usize>().unwrap_or(0);
-        let total = total.parse::<usize>().unwrap_or(0);
-        if part == 0 || part > total || total > 50_000 {
+        if parts.index == 0 || parts.index > parts.total || parts.total > 50_000 {
             missing.push(format!("{name} (invalid split weight group)"));
             continue;
         }
-        if checked.insert((base, total)) {
-            for part in 1..=total {
-                let required = format!("{base}-{part:05}-of-{total:05}.safetensors");
+        if checked.insert((parts.base, parts.total, parts.width)) {
+            for part in 1..=parts.total {
+                let required = parts.format_part(part);
                 if present.binary_search(&required).is_err() {
                     missing.push(required);
                 }
@@ -912,25 +895,12 @@ fn selected_display_name(manifest: &SnapshotManifest) -> Option<String> {
         .find(|file| file.repository_path().ends_with(".safetensors.index.json"))
         .map(|file| file.repository_path().strip_suffix(".index.json").unwrap())
         .unwrap_or(selected);
-    let identity = group
-        .strip_suffix(".safetensors")
-        .and_then(|stem| stem.rsplit_once("-of-"))
-        .and_then(|(prefix, count)| {
-            let (base, part) = prefix.rsplit_once('-')?;
-            (part.len() == 5
-                && count.len() == 5
-                && part
-                    .bytes()
-                    .chain(count.bytes())
-                    .all(|byte| byte.is_ascii_digit()))
-            .then(|| format!("{base}.safetensors"))
-        })
-        .unwrap_or_else(|| group.to_owned());
+    let identity = crate::model_names::strip_shard_suffix(group);
     let base = manifest.repository.rsplit('/').next()?;
     Some(format!("{base} · {identity}"))
 }
 
-fn has_opaque_snapshot_name(dir: &Path) -> bool {
+pub(crate) fn has_opaque_snapshot_name(dir: &Path) -> bool {
     dir.file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| name.len() == 40 && name.bytes().all(|byte| byte.is_ascii_hexdigit()))
@@ -1262,11 +1232,17 @@ pub fn inspect_snapshot(dir: &Path) -> ModelArtifact {
         Ok(None) => {}
     }
     // Preserve user-chosen folder names and established repository naming. Only
-    // an otherwise opaque revision label may use an explicitly declared title.
+    // an otherwise opaque revision label may use the repository the manifest or
+    // HF cache layout records, or an explicitly declared title.
     let name = if let Some(selected_name) = selected_name {
         selected_name
-    } else if repository.is_none() && has_opaque_snapshot_name(dir) {
-        declared_snapshot_name(dir).unwrap_or(name)
+    } else if has_opaque_snapshot_name(dir) {
+        match &repository {
+            Some(repository) => {
+                crate::model_names::repository_display_name(repository).unwrap_or(name)
+            }
+            None => declared_snapshot_name(dir).unwrap_or(name),
+        }
     } else {
         name
     };
@@ -1312,7 +1288,7 @@ pub fn inspect_gguf(path: &Path, size_bytes: u64, missing_shards: &[usize]) -> M
         .file_name()
         .map(|value| value.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let name = crate::models::grouped_shard_name(&file_name);
+    let name = crate::model_names::strip_shard_suffix(&file_name);
     let mut notes = Vec::new();
     let metadata = crate::gguf::read_metadata(path)
         .map_err(|error| notes.push(error))
@@ -1712,6 +1688,28 @@ mod tests {
                 "model · nested/model.safetensors"
             );
         }
+        let four_digit_parts = [
+            "model-0001-of-0004.safetensors",
+            "model-0002-of-0004.safetensors",
+        ];
+        manifest = selected_fixture(
+            &dir,
+            "nested/model-0001-of-0004.safetensors",
+            &four_digit_parts,
+        );
+        manifest.complete = true;
+        write(
+            &dir,
+            SNAPSHOT_MANIFEST,
+            &serde_json::to_vec(&manifest).unwrap(),
+        );
+        let four_digit_display = snapshot_display_name(&dir).unwrap();
+        assert!(four_digit_display.selected);
+        assert_eq!(four_digit_display.name, "model · nested/model.safetensors");
+        assert_eq!(
+            inspect_snapshot(&dir).name,
+            "model · nested/model.safetensors"
+        );
         manifest.format = 1;
         manifest.selected_file = None;
         for file in &mut manifest.files {
@@ -2647,6 +2645,7 @@ mod tests {
         write(&dir, "model.safetensors", b"x");
         write(&dir, "tokenizer.json", b"{}");
         let artifact = inspect_snapshot(&dir);
+        assert_eq!(artifact.name, "name");
         assert_eq!(artifact.ownership, "hf-cache");
         assert_eq!(artifact.repository.as_deref(), Some("org/name"));
         assert_eq!(

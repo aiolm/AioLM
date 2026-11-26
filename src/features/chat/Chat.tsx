@@ -6,7 +6,7 @@ import ChatMessageLog from "./ChatMessageLog";
 import ChatComposer from "./ChatComposer";
 import { providerCopy } from '../../shared/i18n/providerCopy';
 import { modelSettingsCopy } from "../model-settings/modelSettingsCopy";
-import { isModelFilePath, modelDisplayName, normalizeDisplayPath, stripModelShardSuffix } from "../../shared/lib/displayPaths";
+import { formatModelLabel, isModelFilePath, normalizeDisplayPath } from "../../shared/lib/displayPaths";
 import { chatRetryCopy, chatRetryToolsCopy } from "./chatRetryCopy";
 import ChatSkillPicker from "./ChatSkillPicker";
 import { dismissPersonalizationWarnings, useVisiblePersonalizationWarnings } from "./personalizationWarningDismissal";
@@ -124,7 +124,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
                       ...speechSessions.map(session => {
                         const rawModel = session.model ?? '';
                         const shortened = isModelFilePath(rawModel);
-                        const modelLabel = shortened ? modelDisplayName(rawModel) || rawModel : stripModelShardSuffix(rawModel);
+                        const modelLabel = formatModelLabel(rawModel) || rawModel;
                         return {
                           value: session.id,
                           label: `${session.name || session.id} · ${modelLabel}`,

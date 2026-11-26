@@ -533,16 +533,7 @@ pub(super) fn sdk_root_from_tool(name: &str) -> Option<PathBuf> {
 /// Never put such a path in PATH or a compiler variable handed to a child.
 #[cfg(windows)]
 pub(super) fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
-    let value = path.to_string_lossy();
-    const UNC_PREFIX: &str = "\\\\?\\UNC\\";
-    const VERBATIM_PREFIX: &str = "\\\\?\\";
-    if let Some(rest) = value.strip_prefix(UNC_PREFIX) {
-        PathBuf::from(format!("\\\\{rest}"))
-    } else if let Some(rest) = value.strip_prefix(VERBATIM_PREFIX) {
-        PathBuf::from(rest)
-    } else {
-        path
-    }
+    crate::verbatim_path::strip_windows_verbatim_prefix(path)
 }
 
 /// A `hipcc` executable by itself is not an SDK. Distro packages sometimes

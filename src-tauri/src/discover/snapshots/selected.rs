@@ -18,36 +18,15 @@ fn joined(folder: &str, file: &str) -> String {
 
 /// Standard split names select the entire group and always identify part one.
 fn shards(path: &str) -> Result<Option<Vec<String>>, AppError> {
-    let Some(stem) = path.strip_suffix(".safetensors") else {
+    let Some(parts) = crate::model_names::parse_safetensors_shard_raw(path) else {
         return Ok(None);
     };
-    let Some((prefix, count)) = stem.rsplit_once("-of-") else {
-        return Ok(None);
-    };
-    let Some((base, index)) = prefix.rsplit_once('-') else {
-        return Ok(None);
-    };
-    if index.len() != 5
-        || count.len() != 5
-        || !index
-            .bytes()
-            .chain(count.bytes())
-            .all(|byte| byte.is_ascii_digit())
-    {
-        return Ok(None);
-    }
-    let index: usize = index
-        .parse()
-        .map_err(|_| AppError::validation("invalid selected weight shard"))?;
-    let count: usize = count
-        .parse()
-        .map_err(|_| AppError::validation("invalid selected shard count"))?;
-    if index == 0 || index > count || count > MAX_TREE_ENTRIES {
+    if parts.index == 0 || parts.index > parts.total || parts.total > MAX_TREE_ENTRIES {
         return Err(AppError::validation("invalid selected shard count"));
     }
     Ok(Some(
-        (1..=count)
-            .map(|part| format!("{base}-{part:05}-of-{count:05}.safetensors"))
+        (1..=parts.total)
+            .map(|part| parts.format_part(part))
             .collect(),
     ))
 }

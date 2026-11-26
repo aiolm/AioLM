@@ -1236,15 +1236,24 @@ fn vllm_rank_and_tool_settings_match_what_the_server_accepts() {
 #[test]
 fn served_names_are_safe_for_clients() {
     assert_eq!(served_model_name("/m/org/My Model:v1/"), "My-Model-v1");
-    assert_eq!(
-        served_model_name("C:\\models\\qwen"),
-        if cfg!(windows) {
-            "qwen"
-        } else {
-            "C--models-qwen"
-        }
-    );
+    assert_eq!(served_model_name("C:\\models\\qwen"), "qwen");
     assert_eq!(served_model_name("/"), "model");
+}
+
+#[test]
+fn served_names_omit_split_part_suffixes_and_snapshot_revisions() {
+    assert_eq!(
+        served_model_name("/m/Qwen-Q4_K_M-00001-of-00004.gguf"),
+        "Qwen-Q4_K_M.gguf"
+    );
+    assert_eq!(
+        served_model_name("/m/Qwen-Q4_K_M-0001-of-0004.gguf"),
+        "Qwen-Q4_K_M.gguf"
+    );
+    assert_eq!(
+        served_model_name(&format!("/lib/hf/owner/gemma/snapshots/{}", "a".repeat(40))),
+        "gemma"
+    );
 }
 
 #[test]

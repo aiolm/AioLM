@@ -60,7 +60,7 @@ function chooseMarker() {
 describe('unsaved known-sensitive static roles', () => {
   it('masks the help command, preview and import review from draft mapping without saving', async () => {
     const confirm = vi.spyOn(api, 'runtimeHelpConfirmSyntax').mockReturnValue(new Promise(() => undefined));
-    const preview = vi.spyOn(api, 'providerCommandPreview').mockResolvedValue(['/synthetic/engine', ...PREFIX]);
+    const preview = vi.spyOn(api, 'providerCommandPreview').mockResolvedValue({ argv: ['/synthetic/engine', ...PREFIX] });
     const imported = vi.spyOn(api, 'runtimeHelpImport').mockResolvedValue({ plan: [], managed: ['serve', SECRET], unrecognized: [] });
     const onChange = vi.fn();
     const view = (runtime: string) => <I18nProvider initialLocale="en"><ProviderOptions cfg={{ ...cfg, active_runtime: runtime }} disabled={false} onChange={onChange} onInvalid={vi.fn()} /></I18nProvider>;
@@ -112,7 +112,7 @@ describe('unsaved known-sensitive static roles', () => {
 
   it('masks responses that resolve after the draft mapping without saving', async () => {
     const confirm = vi.spyOn(api, 'runtimeHelpConfirmSyntax').mockReturnValue(new Promise(() => undefined));
-    let resolvePreview!: (argv: string[]) => void;
+    let resolvePreview!: (preview: api.CommandPreview) => void;
     const preview = vi.spyOn(api, 'providerCommandPreview').mockReturnValue(new Promise(resolve => { resolvePreview = resolve; }));
     let resolveImport!: (plan: api.ImportedPlan) => void;
     const imported = vi.spyOn(api, 'runtimeHelpImport').mockReturnValue(new Promise(resolve => { resolveImport = resolve; }));
@@ -131,7 +131,7 @@ describe('unsaved known-sensitive static roles', () => {
     await waitFor(() => expect(screen.getByText(/Help command/)).toHaveTextContent('•••'));
     // The stale pre-linkage preview is cleared instead of keeping raw bytes.
     expect(container.querySelector('pre')).toBeNull();
-    resolvePreview(['/synthetic/engine', ...PREFIX]);
+    resolvePreview({ argv: ['/synthetic/engine', ...PREFIX] });
     resolveImport({ plan: [], managed: ['serve', SECRET], unrecognized: [] });
     // Late responses mask the token. The user's own paste input keeps its
     // exact bytes by contract, so response assertions scope past it: the
