@@ -38,12 +38,15 @@ let log = "";
 /** @param {import("node:child_process").ChildProcess} child */
 const exited = child => child.exitCode !== null || child.signalCode !== null;
 
-/** @param {() => unknown | Promise<unknown>} check @param {string} description */
+/** @template T @param {() => T | Promise<T>} check @param {string} description @returns {Promise<NonNullable<T>>} */
 async function waitFor(check, description) {
   const deadline = Date.now() + 30_000;
   let lastError;
   while (Date.now() < deadline) {
-    try { if (await check()) return; } catch (error) { lastError = error; }
+    try {
+      const value = await check();
+      if (value) return /** @type {NonNullable<T>} */ (value);
+    } catch (error) { lastError = error; }
     await delay(200);
   }
   throw new Error(`${description}: ${lastError ?? "timed out"}\n${log.slice(-4000)}`);
@@ -78,7 +81,10 @@ async function launch() {
   app.stdout.on("data", chunk => { log += chunk.toString(); });
   app.stderr.on("data", chunk => { log += chunk.toString(); });
   await waitFor(() => request("GET", "/status"), "embedded WebDriver startup");
-  const created = await request("POST", "/session", { capabilities: { alwaysMatch: { "wdio:tauriServiceOptions": { windowLabel: "main" } } } });
+  const created = await waitFor(
+    () => request("POST", "/session", { capabilities: { alwaysMatch: { "wdio:tauriServiceOptions": { windowLabel: "main" } } } }),
+    "embedded WebDriver main window session",
+  );
   assert.equal(created.capabilities.platformName, "macos");
   assert.equal(created.capabilities.browserName, "webkit");
   session = created.sessionId;
