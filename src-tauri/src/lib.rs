@@ -464,9 +464,24 @@ pub fn run() {
     // icon, so someone who turned the setting off does not keep one.
     if let Err(error) = tray::apply(
         app.handle(),
-        startup_config.is_some_and(|cfg| cfg.close_to_tray),
+        startup_config.as_ref().is_some_and(|cfg| cfg.close_to_tray),
     ) {
         eprintln!("{error}");
+    }
+
+    // The API listener needs no model and no window, so it starts here rather
+    // than from whichever frontend page opens first. It starts after the
+    // persistent key above is loaded, so clients keep the key they already
+    // have. A port that is taken is logged and leaves the API stopped; the API
+    // page shows the stopped state and can start it on another port.
+    if let Some(cfg) = startup_config.filter(|cfg| cfg.start_api_on_launch) {
+        let handle = app.handle().clone();
+        tauri::async_runtime::spawn(async move {
+            let state = handle.state::<AppState>();
+            if let Err(error) = commands::gateway::start_api_at_launch(&state, &cfg).await {
+                eprintln!("could not start the API server at launch: {error}");
+            }
+        });
     }
 
     // A force-closed PR build can leave its archive, source tree, CMake tree,

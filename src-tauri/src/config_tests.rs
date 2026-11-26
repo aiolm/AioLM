@@ -240,6 +240,24 @@ fn closing_the_window_hides_to_the_tray_unless_the_setting_was_turned_off() {
     assert!(!opted_out.close_to_tray);
 }
 
+#[test]
+fn the_api_starts_on_launch_only_when_the_setting_was_turned_on() {
+    assert!(!AppConfig::default().start_api_on_launch);
+    // A configuration written before the setting existed opens no port.
+    let existing: AppConfig =
+        serde_json::from_value(serde_json::json!({"config_version": 11, "models_dir": "models"}))
+            .unwrap();
+    assert!(!existing.start_api_on_launch);
+    let opted_in: AppConfig = serde_json::from_value(serde_json::json!({
+        "config_version": 11,
+        "models_dir": "models",
+        "start_api_on_launch": true
+    }))
+    .unwrap();
+    assert!(opted_in.start_api_on_launch);
+    assert!(!crate::config::execution::snapshot(&opted_in).contains_key("start_api_on_launch"));
+}
+
 fn write_config(path: &Path, value: &serde_json::Value) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, serde_json::to_vec_pretty(value).unwrap()).unwrap();

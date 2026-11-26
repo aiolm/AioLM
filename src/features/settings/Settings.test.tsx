@@ -40,6 +40,23 @@ describe("desktop settings", () => {
     expect(store.cfg?.close_to_tray).toBe(false);
   });
 
+  it("leaves the API stopped at launch by default, saves the opt-in, and keeps the old value when saving fails", async () => {
+    const store = createTestStore();
+    render(<I18nProvider initialLocale="en"><SettingsPanel preferences={defaultPreferences()} update={vi.fn()} reset={vi.fn()} store={store} /></I18nProvider>);
+    fireEvent.click(screen.getByRole("tab", { name: "Server" }));
+    const toggle = () => screen.getByRole("switch", { name: "Start API server on app launch" });
+    // A configuration without the field takes the backend default: off.
+    expect(toggle()).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(toggle());
+    await waitFor(() => expect(store.updateConfig).toHaveBeenCalledWith({ start_api_on_launch: true }));
+    expect(store.cfg?.start_api_on_launch).toBe(true);
+
+    vi.mocked(store.updateConfig).mockRejectedValueOnce(new Error("settings file is read-only"));
+    fireEvent.click(toggle());
+    expect(await screen.findByRole("alert")).toHaveTextContent("settings file is read-only");
+    expect(store.cfg?.start_api_on_launch).toBe(true);
+  });
+
   it("shows the operating system's startup registration and reports a refused change", async () => {
     vi.mocked(api.getLaunchAtLogin).mockResolvedValueOnce(false);
     vi.mocked(api.setLaunchAtLogin).mockResolvedValueOnce(true).mockRejectedValueOnce(new Error("access denied"));

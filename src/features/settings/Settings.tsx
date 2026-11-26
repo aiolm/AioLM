@@ -43,6 +43,12 @@ const launchAtLoginText = {
   ja: { label: "コンピューター起動時に自動で開始", description: "このコンピューターにサインインするとAioLMを自動で開きます。", failed: "スタートアップ登録を変更できませんでした。" },
   zh: { label: "开机时自动启动", description: "登录此计算机时自动打开AioLM。", failed: "无法更改开机启动设置。" },
 };
+const startApiOnLaunchText = {
+  en: { label: "Start API server on app launch", description: "Start the local API server on the saved port when AioLM opens, even if no model is loaded yet.", failed: "The setting could not be saved." },
+  ko: { label: "앱 시작 시 API 서버 시작", description: "AioLM이 열리면 모델이 아직 로드되지 않았더라도 저장된 포트로 로컬 API 서버를 시작합니다.", failed: "설정을 저장하지 못했습니다." },
+  ja: { label: "起動時にAPIサーバーを開始", description: "AioLMを開くと、モデルがまだ読み込まれていなくても保存済みのポートでローカルAPIサーバーを開始します。", failed: "設定を保存できませんでした。" },
+  zh: { label: "应用启动时启动API服务器", description: "打开AioLM时，即使尚未加载模型，也会在已保存的端口上启动本地API服务器。", failed: "无法保存设置。" },
+};
 // Reset and data deletion sit in their own group, away from everyday preferences.
 const dangerText = {
   en: { title: "Reset and delete" },
@@ -212,6 +218,20 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
     } catch (error) { setTrayError(error instanceof Error ? error.message : trayCopy.failed); }
     finally { setTraySaving(false); }
   };
+  const apiLaunchCopy = startApiOnLaunchText[locale];
+  const [apiLaunchError, setApiLaunchError] = useState<string | null>(null);
+  const [apiLaunchSaving, setApiLaunchSaving] = useState(false);
+  // Saved to the backend configuration, which the desktop process reads at
+  // launch before any window exists; it takes effect on the next launch.
+  const saveStartApiOnLaunch = async (value: boolean) => {
+    if (!store) return;
+    setApiLaunchSaving(true); setApiLaunchError(null);
+    try {
+      await store.updateConfig({ start_api_on_launch: value });
+      showSaved("saved");
+    } catch (error) { setApiLaunchError(error instanceof Error ? error.message : apiLaunchCopy.failed); }
+    finally { setApiLaunchSaving(false); }
+  };
 
   const wipeConversationData = async () => {
     setWiping(true);
@@ -340,6 +360,12 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
         {(normalizedQuery || section === "server") && <Group id="server" title={t("settings.server")}>
           {isNativeRuntimeAvailable() && <LaunchAtLoginRow onSaved={() => showSaved("saved")} />}
           <Row id="settings-auto-start" label={t("settings.autoStart")} description={t("settings.autoStartDesc")}>{bool("settings-auto-start", preferences.server.autoStart, (value) => patch({ server: { ...preferences.server, autoStart: value } }))}</Row>
+          {isNativeRuntimeAvailable() && store?.cfg && <Row id="settings-start-api-on-launch" label={apiLaunchCopy.label} description={apiLaunchCopy.description}>
+            <div className="settings-control-stack">
+              <Switch id="settings-start-api-on-launch" {...settingAria("settings-start-api-on-launch")} checked={store.cfg.start_api_on_launch === true} disabled={apiLaunchSaving} onChange={(value) => { void saveStartApiOnLaunch(value); }} />
+              {apiLaunchError && <FeedbackBanner tone="error">{normalizeDisplayText(apiLaunchError)}</FeedbackBanner>}
+            </div>
+          </Row>}
           {isNativeRuntimeAvailable() && store?.cfg && <Row id="settings-close-to-tray" label={trayCopy.label} description={trayCopy.description}>
             <div className="settings-control-stack">
               <Switch id="settings-close-to-tray" {...settingAria("settings-close-to-tray")} checked={store.cfg.close_to_tray !== false} disabled={traySaving} onChange={(value) => { void saveCloseToTray(value); }} />

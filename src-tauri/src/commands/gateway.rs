@@ -136,6 +136,21 @@ async fn stop_api(state: &AppState) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Start the listener at application launch when the saved settings ask for
+/// it, on the saved port. Reports `None` when the setting is off. It goes
+/// through the same control lock and exit gate as the IPC start, so a start
+/// from the API page during launch is not doubled and an exit that began
+/// first is not undone.
+pub(crate) async fn start_api_at_launch(
+    state: &AppState,
+    cfg: &config::AppConfig,
+) -> Result<Option<ApiServerStatus>, AppError> {
+    if !cfg.start_api_on_launch {
+        return Ok(None);
+    }
+    start_api(state, cfg.port).await.map(Some)
+}
+
 #[tauri::command]
 pub(crate) async fn start_api_server(
     state: State<'_, AppState>,
@@ -418,6 +433,56 @@ mod tests {
                 .is_err(),
             "the refused listener must not keep its port"
         );
+    }
+
+    #[tokio::test]
+    async fn launch_leaves_the_api_stopped_unless_the_setting_is_on() {
+        let state = AppState::default();
+        let off = config::AppConfig {
+            port: 0,
+            ..Default::default()
+        };
+        assert_eq!(start_api_at_launch(&state, &off).await.unwrap(), None);
+        assert!(!status_of(&state, || 0).unwrap().running);
+
+        let on = config::AppConfig {
+            port: 0,
+            start_api_on_launch: true,
+            ..Default::default()
+        };
+        let started = start_api_at_launch(&state, &on).await.unwrap().unwrap();
+        assert!(started.running);
+        assert_eq!(status_of(&state, || 0).unwrap(), started);
+        stop_api(&state).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_launch_start_on_a_taken_port_reports_it_and_leaves_the_api_stopped() {
+        let state = AppState::default();
+        let occupied = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = occupied.local_addr().unwrap().port();
+        let cfg = config::AppConfig {
+            port,
+            start_api_on_launch: true,
+            ..Default::default()
+        };
+        let error = start_api_at_launch(&state, &cfg).await.unwrap_err();
+        assert_eq!(error.kind, crate::error::ErrorKind::Unavailable);
+        assert!(!status_of(&state, || port).unwrap().running);
+    }
+
+    #[tokio::test]
+    async fn a_launch_start_after_exit_began_is_refused() {
+        let state = AppState::default();
+        state.begin_normal_exit();
+        let cfg = config::AppConfig {
+            port: 0,
+            start_api_on_launch: true,
+            ..Default::default()
+        };
+        let error = start_api_at_launch(&state, &cfg).await.unwrap_err();
+        assert_eq!(error.kind, crate::error::ErrorKind::Busy);
+        assert!(!status_of(&state, || 0).unwrap().running);
     }
 
     #[tokio::test]

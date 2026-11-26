@@ -441,6 +441,13 @@ pub struct AppConfig {
     /// written before the tray existed, keep running servers alive when the
     /// window closes. A config that saved an explicit `false` keeps quitting.
     pub close_to_tray: bool,
+    /// Whether the external API listener starts on the saved `port` when the
+    /// application launches. Defaults to `false` (relying on the
+    /// container-level `#[serde(default)]` above): a fresh installation, and a
+    /// config file written before this setting existed, open no port until the
+    /// API is started explicitly. It is an application preference, not an
+    /// execution setting, so launches and profiles never carry it.
+    pub start_api_on_launch: bool,
     /// Whether first-run onboarding has been finished. A fresh installation
     /// starts at `false` (see `Default`), but a config file written before
     /// onboarding existed belongs to someone already using the app, so this
@@ -575,6 +582,7 @@ impl Default for AppConfig {
             lora_adapters: Vec::new(),
             stop_existing_sessions_on_load: true,
             close_to_tray: true,
+            start_api_on_launch: false,
             onboarding_completed: false,
             sessions: Vec::new(),
             gpu: GpuPlacement::default(),

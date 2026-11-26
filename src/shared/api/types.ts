@@ -56,6 +56,8 @@ export interface AppConfig {
   stop_existing_sessions_on_load?: boolean;
   /** Hide the window to the system tray on close instead of quitting; on unless saved as `false`. */
   close_to_tray?: boolean;
+  /** Start the external API listener on the saved port when the app launches; off unless saved as `true`. */
+  start_api_on_launch?: boolean;
   /** First-run onboarding finished; absent on older app builds, which predate onboarding and count as finished. */
   onboarding_completed?: boolean;
   sessions?: SessionDefinition[];

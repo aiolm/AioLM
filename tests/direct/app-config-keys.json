@@ -45,6 +45,7 @@
   "spec_draft_p_min": true,
   "spec_draft_p_split": true,
   "spec_type": true,
+  "start_api_on_launch": true,
   "stop_existing_sessions_on_load": true,
   "temperature": true,
   "threads": true,
