@@ -1,6 +1,6 @@
 [package]
 name = "aiolm"
-version = "0.5.0"
+version = "0.5.1"
 default-run = "aiolm"
 description = "AioLM: Tauri desktop manager for local inference runtimes"
 authors = ["aiolm contributors"]
