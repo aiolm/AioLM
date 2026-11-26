@@ -98,6 +98,19 @@ describe('generic runtime option renderer', () => {
     expect(onChange).toHaveBeenLastCalledWith({ threads: '7' });
   });
 
+  it('drops the shell quotes of a pasted path but keeps quoted text literal', async () => {
+    const current = schema([textOption('mmproj'), textOption('label')]);
+    const onChange = vi.fn();
+    render(<I18nProvider initialLocale="en"><RuntimeOptionSchemaForm schema={current} values={{}} scope={[]} onChange={onChange} /></I18nProvider>);
+    await waitFor(() => expect(runtimeHelp.runtimeHelpResolve).toHaveBeenCalled());
+    const mmproj = screen.getByRole('textbox', { name: '--mmproj' });
+    fireEvent.change(mmproj, { target: { value: '"C:\\Models\\한글 dir\\mmproj-F32.gguf"' } });
+    expect(onChange).toHaveBeenLastCalledWith({ mmproj: 'C:\\Models\\한글 dir\\mmproj-F32.gguf' });
+    expect(mmproj).toHaveValue('C:\\Models\\한글 dir\\mmproj-F32.gguf');
+    fireEvent.change(screen.getByRole('textbox', { name: '--label' }), { target: { value: '"quoted text"' } });
+    expect(onChange).toHaveBeenLastCalledWith({ label: '"quoted text"' });
+  });
+
   it('links native validation to the rejected value and clears it when the value is accepted', async () => {
     const message = 'value is outside the documented numeric range';
     const current = schema([textOption('threads'), textOption('workers')]);

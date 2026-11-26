@@ -968,6 +968,52 @@ pub fn public_setting_name(option: &OptionDefinition) -> Option<&str> {
         .min()
 }
 
+/// Windows "Copy as path" and terminal drag-and-drop wrap a path in quotes
+/// meant for a shell. Launch arguments never pass through a shell, so the
+/// quotes would reach the engine as part of the file name. One pair of
+/// matching quotes around an absolute path is removed; any other text, and a
+/// path that itself contains that quote, stays literal.
+pub(crate) fn unquote_pasted_path(text: &str) -> &str {
+    let trimmed = text.trim();
+    for quote in ['"', '\''] {
+        if let Some(inner) = trimmed
+            .strip_prefix(quote)
+            .and_then(|rest| rest.strip_suffix(quote))
+        {
+            if !inner.contains(quote) && looks_like_absolute_path(inner) {
+                return inner;
+            }
+        }
+    }
+    text
+}
+
+/// [`unquote_pasted_path`] for one argv token: the whole token, or the value
+/// of a `--flag="C:\path"` token.
+pub(crate) fn unquote_pasted_path_arg(token: &str) -> std::borrow::Cow<'_, str> {
+    if let Some((flag, value)) = token.split_once('=') {
+        if flag.starts_with('-') {
+            let unquoted = unquote_pasted_path(value);
+            return if unquoted.len() == value.len() {
+                token.into()
+            } else {
+                format!("{flag}={unquoted}").into()
+            };
+        }
+    }
+    unquote_pasted_path(token).into()
+}
+
+fn looks_like_absolute_path(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    text.starts_with('/')
+        || text.starts_with("\\\\")
+        || (bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'\\' | b'/'))
+}
+
 impl OptionDefinition {
     pub(crate) fn scalar(&self, value: &Value) -> Result<String, String> {
         let valid = match self.kind.supported() {
@@ -999,7 +1045,7 @@ impl OptionDefinition {
         let text = if self.kind.supported() == Some(&ValueKind::Json) {
             serde_json::to_string(value).map_err(|e| e.to_string())?
         } else if let Some(text) = value.as_str() {
-            text.to_owned()
+            unquote_pasted_path(text).to_owned()
         } else {
             value.to_string()
         };
@@ -2380,6 +2426,66 @@ mod tests {
                 "--secret",
                 r"\\?\C:\kept-exact",
             ]
+        );
+    }
+
+    #[test]
+    fn pasted_shell_quoted_paths_reach_the_engine_without_quotes() {
+        // Help-parsed options rarely declare that they take a path, so the
+        // value itself decides: Explorer's "Copy as path" must just work.
+        let mmproj = option("mmproj", ValueKind::Text, 1, Some(1));
+        let mut mtp = option("mtp-model", ValueKind::Text, 1, Some(1));
+        mtp.spellings[0].style = ValueStyle::Equals;
+        let label = option("label", ValueKind::Text, 1, Some(1));
+        let described = schema(vec![mmproj, mtp, label]);
+        let values = selected(&[
+            (
+                "mmproj",
+                vec![vec![json!(r#""C:\한글 모델\mmproj-F32.gguf""#)]],
+            ),
+            (
+                "mtp-model",
+                vec![vec![json!("'/synthetic/models/mtp model.gguf'")]],
+            ),
+            ("label", vec![vec![json!(r#""quoted text""#)]]),
+        ]);
+        let resolved = described.resolve(&[], &values).unwrap();
+        assert_eq!(
+            resolved.argv,
+            vec![
+                "--mmproj",
+                r"C:\한글 모델\mmproj-F32.gguf",
+                "--mtp-model=/synthetic/models/mtp model.gguf",
+                "--label",
+                r#""quoted text""#,
+            ]
+        );
+    }
+
+    #[test]
+    fn only_one_matching_quote_pair_around_an_absolute_path_is_removed() {
+        for (pasted, expected) in [
+            (r#""C:\models\a.gguf""#, r"C:\models\a.gguf"),
+            (r#"  "D:/models/a.gguf"  "#, "D:/models/a.gguf"),
+            (r#""\\nas\share\a.gguf""#, r"\\nas\share\a.gguf"),
+            (r#""\\?\C:\models\a.gguf""#, r"\\?\C:\models\a.gguf"),
+            ("'/home/user/a.gguf'", "/home/user/a.gguf"),
+            (r"C:\models\a.gguf", r"C:\models\a.gguf"),
+            (r#""models\a.gguf""#, r#""models\a.gguf""#),
+            (r#""C:\models\a.gguf'"#, r#""C:\models\a.gguf'"#),
+            (r#""C:\a "b" c.gguf""#, r#""C:\a "b" c.gguf""#),
+            (r#""""#, r#""""#),
+            ("\"", "\""),
+        ] {
+            assert_eq!(unquote_pasted_path(pasted), expected, "{pasted}");
+        }
+        assert_eq!(
+            unquote_pasted_path_arg(r#"--mmproj="C:\m\a.gguf""#),
+            r"--mmproj=C:\m\a.gguf"
+        );
+        assert_eq!(
+            unquote_pasted_path_arg(r#"--label="text""#),
+            r#"--label="text""#
         );
     }
 }

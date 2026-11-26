@@ -3,6 +3,7 @@ import { inNumericRange, type OptionSchemaDefinition } from '../../shared/api/ru
 import { CustomSelect } from '../../shared/ui/CustomSelect';
 import { runtimeOptionsCopy } from '../../shared/i18n/runtimeOptionsCopy';
 import { JsonOptionNumberError, parseJsonOption } from '../../shared/runtime/jsonOptionNumbers';
+import { unquotePastedPath } from '../../shared/lib/pastedPath';
 import { display, kindOf, supported } from './optionPresentation';
 
 type Copy = (typeof runtimeOptionsCopy)['en'];
@@ -122,7 +123,9 @@ export function ValueInput({ inputId, option, value, label, disabled, emptyMeans
   }
   // Change already parses and commits the draft. Recommitting it on blur
   // restarts async option validation between pointer down and the save click.
-  const commit = (next: string) => {
+  const commit = (typed: string) => {
+    // A pasted "C:\path\model.gguf" keeps no shell quotes; JSON is literal.
+    const next = kind === 'json' ? typed : unquotePastedPath(typed);
     setDraft(next);
     if (next === '' && (emptyMeans === 'inherit' || !textual(option))) {
       markInvalid(emptyMeans === 'empty');

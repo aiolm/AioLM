@@ -3,6 +3,7 @@ import { errorMessage } from '../../shared/api/errors';
 import { pickRuntimePath } from '../../shared/api/runtimeHelp';
 import { useI18n } from '../../shared/i18n/i18n';
 import { entrypointCopy } from '../../shared/i18n/entrypointCopy';
+import { unquotePastedPathArg } from '../../shared/lib/pastedPath';
 
 /** Explicit argv tokens keep paths with spaces and Unicode in one argument. */
 export default function RuntimeArgumentList({ label, tokens, disabled, onChange, onFile, onError, descriptionId }: {
@@ -28,7 +29,7 @@ export default function RuntimeArgumentList({ label, tokens, disabled, onChange,
     {tokens.map((token, index) => <span key={index} className="entrypoint-token">
       <input id={`${id}-${index}`} name={`${label}-${index}`} className="app-input" value={token} disabled={disabled}
         aria-label={`${label} ${copy.token} ${index + 1}`} autoCorrect="off" autoCapitalize="off" spellCheck={false}
-        onChange={event => onChange(tokens.map((current, i) => i === index ? event.target.value : current))} />
+        onChange={event => onChange(tokens.map((current, i) => i === index ? unquotePastedPathArg(event.target.value) : current))} />
       <button type="button" className="app-button app-button--secondary" disabled={disabled}
         onClick={() => onChange(tokens.filter((_, i) => i !== index))}>{copy.removeToken}</button>
     </span>)}

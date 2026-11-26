@@ -68,7 +68,12 @@ pub(crate) fn validated(
                 return Err(format!("{flag} is duplicated in additional arguments"));
             }
         }
-        result.push(crate::verbatim_path::strip_windows_verbatim_prefix_arg(token).into_owned());
+        // A pasted, shell-quoted path must not keep its quotes in argv. Only
+        // a whole token or a `--flag=` value is unquoted, so the flag checks
+        // above see the same flag either way.
+        let unquoted = super::runtime_options::unquote_pasted_path_arg(token);
+        result
+            .push(crate::verbatim_path::strip_windows_verbatim_prefix_arg(&unquoted).into_owned());
     }
     Ok(result)
 }
@@ -92,6 +97,25 @@ mod tests {
             raw_help: vec![],
             end_of_options: Default::default(),
         }
+    }
+
+    #[test]
+    fn pasted_quoted_paths_lose_their_shell_quotes() {
+        let values = json!({"extra_args": [
+            "--mmproj", "\"C:\\Models\\한글 dir\\mmproj-F32.gguf\"",
+            "--draft='/synthetic/models/draft model.gguf'",
+            "--label", "\"not a path\"",
+        ]});
+        assert_eq!(
+            validated(&schema(), &BTreeMap::new(), values.as_object().unwrap()).unwrap(),
+            [
+                "--mmproj",
+                "C:\\Models\\한글 dir\\mmproj-F32.gguf",
+                "--draft=/synthetic/models/draft model.gguf",
+                "--label",
+                "\"not a path\"",
+            ]
+        );
     }
 
     #[test]
