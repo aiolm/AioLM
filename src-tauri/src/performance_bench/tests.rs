@@ -1478,14 +1478,20 @@ fn capture_engine_args_returns_direct_engine_command_without_verbatim_prefix() {
     let conn_dir = root.join(engine_id.as_str()).join(&runtime_id);
     fs::create_dir_all(&conn_dir).unwrap();
     let conn_path = conn_dir.join("connection.json");
-    let verbatim_engine = format!(
-        r"\\?\{}",
-        engine.to_string_lossy().trim_start_matches(r"\\?\")
-    );
-    let verbatim_model = format!(
-        r"\\?\{}",
-        model.to_string_lossy().trim_start_matches(r"\\?\")
-    );
+    let clean_engine = crate::verbatim_path::strip_windows_verbatim_prefix(engine.clone())
+        .to_string_lossy()
+        .into_owned();
+    let clean_model = crate::verbatim_path::strip_windows_verbatim_prefix(model.clone())
+        .to_string_lossy()
+        .into_owned();
+    #[cfg(windows)]
+    let stored_engine = format!(r"\\?\{clean_engine}");
+    #[cfg(not(windows))]
+    let stored_engine = clean_engine;
+    #[cfg(windows)]
+    let stored_model = format!(r"\\?\{clean_model}");
+    #[cfg(not(windows))]
+    let stored_model = clean_model.clone();
     let spec_json = json!({
         "version": 1,
         "engine_id": engine_id.as_str(),
@@ -1493,14 +1499,14 @@ fn capture_engine_args_returns_direct_engine_command_without_verbatim_prefix() {
         "target": {
             "kind": "managed",
             "launch": {
-                "program": verbatim_engine,
+                "program": stored_engine,
                 "args": ["serve", "--model", "{model}", "--port={port}", "--host={host}"],
                 "env": {},
                 "working_directory": null
             },
             "artifacts": []
         },
-        "model_path": verbatim_model,
+        "model_path": stored_model,
         "served_alias": "synthetic-bench-model"
     });
     fs::write(&conn_path, serde_json::to_vec(&spec_json).unwrap()).unwrap();
@@ -1542,8 +1548,8 @@ fn capture_engine_args_returns_direct_engine_command_without_verbatim_prefix() {
         },
         "options": [],
         "model_formats": ["unknown"],
-        "models": [{"path": verbatim_model, "name": "Synthetic model"}],
-        "artifacts": [conn_path.to_string_lossy(), verbatim_engine],
+        "models": [{"path": stored_model, "name": "Synthetic model"}],
+        "artifacts": [conn_path.to_string_lossy(), stored_engine],
         "health_path": "/health",
         "health_authenticated": false
     }))
@@ -1569,9 +1575,6 @@ fn capture_engine_args_returns_direct_engine_command_without_verbatim_prefix() {
     )
     .unwrap();
 
-    let clean_model = crate::verbatim_path::strip_windows_verbatim_prefix(model)
-        .to_string_lossy()
-        .into_owned();
     let cfg = AppConfig {
         active_provider: engine_id.as_str().into(),
         active_runtime: runtime_id.clone(),
