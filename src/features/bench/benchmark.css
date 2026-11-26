@@ -116,14 +116,15 @@
 .performance-table-navigation > span:first-child { margin-right: auto; }
 .performance-table-navigation > button { flex-shrink: 0; }
 .performance-results table { width: 100%; border-collapse: collapse; font-size: var(--ui-text-support); text-align: right; font-variant-numeric: tabular-nums; }
-.performance-results th, .performance-results td { padding: 12px; white-space: nowrap; border-bottom: 1px solid var(--ui-border); }
-.performance-results th:first-child, .performance-results td:first-child { padding-inline-start: 16px; }
-.performance-results th:last-child, .performance-results td:last-child { padding-inline-end: 16px; }
-.performance-results thead th { color: var(--ui-muted); font-weight: 500; background: var(--ui-surface-muted); }
+.performance-results th, .performance-results td { padding: 8px 5px; white-space: nowrap; border-bottom: 1px solid var(--ui-border); }
+.performance-results th:first-child, .performance-results td:first-child { padding-inline-start: 10px; }
+.performance-results th:last-child, .performance-results td:last-child { padding-inline-end: 10px; }
+.performance-results thead th { color: var(--ui-ink); font-size: var(--ui-text-caption); font-weight: 600; line-height: 1.25; vertical-align: bottom; white-space: normal; word-break: keep-all; background: var(--ui-surface-muted); }
+.performance-results .performance-th-sub { display: block; margin-top: 2px; color: var(--ui-muted); font-size: var(--ui-text-caption); font-weight: 400; line-height: 1.2; }
 .performance-results .performance-phase-heading { min-width: 9rem; max-width: 12rem; white-space: normal; line-height: 1.5; }
 .performance-results th:first-child { text-align: left; }
 .performance-results tbody th { font-weight: 500; }
-.performance-results small { display: block; margin-top: 4px; color: var(--ui-muted); font-size: var(--ui-text-support); font-weight: 400; }
+.performance-results small { display: block; margin-top: 2px; color: var(--ui-muted); font-size: 10px; font-weight: 400; line-height: 1.2; white-space: nowrap; }
 .performance-results tbody tr:last-child > * { border-bottom: 0; }
 .performance-results > .performance-hint { padding: 12px 16px; }
 .performance-metric-primary { color: var(--ui-accent); font-weight: 600; }
@@ -139,7 +140,7 @@
 .performance-details code { display: block; padding: 12px; background: var(--ui-mono-bg); color: var(--ui-mono-ink); border-radius: var(--ui-radius-control); font-size: var(--ui-text-support); overflow-wrap: anywhere; white-space: pre-wrap; line-height: 1.5; }
 .performance-details-heading { font-size: var(--ui-text-group); font-weight: 600; }
 .performance-metric-guide { display: grid; gap: 12px; margin: 0; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.5; }
-.performance-metric-guide > div { display: grid; grid-template-columns: minmax(0, 9rem) minmax(0, 1fr); align-items: baseline; gap: 4px 16px; }
+.performance-metric-guide > div { display: grid; grid-template-columns: minmax(0, 12.5rem) minmax(0, 1fr); align-items: baseline; gap: 4px 16px; }
 .performance-metric-guide dt { color: var(--ui-ink); font-weight: 500; }
 .performance-metric-guide dd { margin: 0; overflow-wrap: anywhere; }
 .performance-run-config { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 12px 24px; margin: 0; font-size: var(--ui-text-support); }
@@ -195,7 +196,7 @@
 .performance-explorer-actions > :not(.performance-target-actions) { contain: inline-size; }
 /* Use the actual work width, excluding shell/sidebar and page padding. */
 @container workspace (min-width: 900px) {
-  .performance-workspace { grid-template-columns: clamp(20rem, 25cqi, 28rem) minmax(0, 1fr); align-items: stretch; }
+  .performance-workspace { grid-template-columns: clamp(18rem, 23cqi, 24rem) minmax(0, 1fr); gap: 20px; align-items: stretch; }
   /* Beside the setup, an empty result card takes the remaining height so the
      metrics guide and shared results line up with the setup's bottom edge. */
   .performance-results-column, .performance-results-area { display: flex; flex-direction: column; }

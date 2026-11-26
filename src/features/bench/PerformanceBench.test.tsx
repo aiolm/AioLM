@@ -123,8 +123,9 @@ describe("Performance benchmark workflow", () => {
     await waitFor(() => expect(screen.getByRole('button', { name: copy.run })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: copy.run }));
     const table = await screen.findByRole('table', { name: copy.servingResults });
-    expect(within(table).getByRole('columnheader', { name: new RegExp(copy.servingTest) })).toBeVisible();
-    expect(within(table).getByRole('columnheader', { name: new RegExp(copy.reportedRate) })).toBeVisible();
+    const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    expect(within(table).getByRole('columnheader', { name: new RegExp(`^${escapeRegExp(copy.tableInput)}${escapeRegExp(copy.bytes)}$`) })).toBeVisible();
+    expect(within(table).getByRole('columnheader', { name: new RegExp(`^${escapeRegExp(copy.tableReportedRate)}`) })).toBeVisible();
     expect(within(table).getAllByText(copy.unavailable).length).toBeGreaterThan(0);
   });
 
@@ -140,8 +141,8 @@ describe("Performance benchmark workflow", () => {
     table.focus();
     fireEvent.keyDown(table, { key: 'ArrowRight' });
     expect(table.scrollLeft).toBeGreaterThan(0);
-    expect(within(table).getByRole('columnheader', { name: /Generation speed per request/ })).toBeVisible();
-    expect(within(table).getByRole('columnheader', { name: /Observed output/ })).toBeVisible();
+    expect(within(table).getByRole('columnheader', { name: /Decode/ })).toBeVisible();
+    expect(within(table).getByRole('columnheader', { name: /Output/ })).toBeVisible();
     fireEvent.keyDown(table, { key: 'End' });
     expect(table.scrollLeft).toBe(640);
     fireEvent.keyDown(table, { key: 'Home' });

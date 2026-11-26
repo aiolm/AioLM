@@ -107,7 +107,7 @@ export function summarizeServingPoints(rows: readonly ServingAggregationRow[]): 
     output_bytes_per_second: servingStat(group.observations.output_bytes_per_second),
     e2e_ms: servingStat(group.observations.e2e_ms),
     peak_memory_bytes: servingStat(group.observations.peak_memory_bytes),
-  })).sort((a, b) => a.input_bytes - b.input_bytes
-    || a.concurrency - b.concurrency
+  })).sort((a, b) => a.concurrency - b.concurrency
+    || a.input_bytes - b.input_bytes
     || a.max_output_tokens - b.max_output_tokens);
 }

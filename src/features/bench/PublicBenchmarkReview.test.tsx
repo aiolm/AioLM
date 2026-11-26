@@ -53,7 +53,7 @@ describe('public benchmark review', () => {
     expect(summary).toHaveTextContent('openai-chat-serving@5');
     expect(summary).toHaveTextContent('Maximum output token request');
     const table = within(summary).getByRole('table', { name: 'Results' });
-    expect(within(table).getByRole('columnheader', { name: /Total token throughput/ })).toBeVisible();
+    expect(within(table).getByRole('columnheader', { name: /Throughput/ })).toBeVisible();
     expect(within(table).getAllByText('N/A').length).toBeGreaterThan(0);
     expect(within(table).getByText('60.0')).toBeVisible();
     expect(summary).not.toHaveTextContent(/PRIVATE|synthetic|private|diagnostic/);
@@ -78,10 +78,9 @@ describe('public benchmark review', () => {
     const summary = screen.getByLabelText('Shared details');
     const table = within(summary).getByRole('table', { name: 'Results' });
     const cells = within(defined(within(table).getAllByRole('row')[1])).getAllByRole('cell');
-    expect(cells[7]).toHaveTextContent('45.0');
-    expect(cells[7]).toHaveTextContent('30.0 – 60.0 · n=2');
-    expect(cells[2]).toHaveTextContent('50.0 – 50.0 · n=1');
-    expect(cells[6]).toHaveTextContent('N/A');
+    expect(cells[7]).toHaveTextContent(/^45\.0$/);
+    expect(cells[2]).toHaveTextContent(/^50\.0$/);
+    expect(cells[6]).toHaveTextContent(/^N\/A$/);
     expect(summary).toHaveTextContent('sglang');
     expect(summary).toHaveTextContent('example/model');
     expect(summary).toHaveTextContent('a'.repeat(40));
@@ -96,7 +95,7 @@ describe('public benchmark review', () => {
     render(<PublicBenchmarkSummary snapshot={snapshot} copy={benchmarkCopy('en')} />);
     const cells = within(defined(within(screen.getByRole('table', { name: 'Results' })).getAllByRole('row')[1])).getAllByRole('cell');
     expect(cells[2]).toHaveTextContent('N/A');
-    expect(cells[7]).toHaveTextContent('0.0 – 0.0 · n=1');
+    expect(cells[7]).toHaveTextContent(/^0\.0$/);
     expect(cells[6]).toHaveTextContent('N/A');
     expect(screen.getByLabelText('Shared details')).toHaveTextContent('valid zero-byte output');
   });

@@ -49,7 +49,7 @@ describe('performance Markdown', () => {
     const headers = defined(lines[0]);
     const values = defined(lines[2]);
     expect(values[headers.indexOf('Status')]).toBe('Failed');
-    expect(values[headers.indexOf('Generation speed per request (tok/s) · median')]).toBe('N/A');
+    expect(values[headers.indexOf('Generation speed per request (Decode, tok/s) · median')]).toBe('N/A');
     expect(markdown).not.toMatch(/PRIVATE|synthetic/);
     failed.result.status = 'cancelled';
     expect(performanceMarkdown(failed, 'en')).toBe('');

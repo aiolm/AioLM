@@ -21,10 +21,10 @@ const identityLabels: Record<Locale, string[]> = {
   zh: ['测量时间', '测量方法', '输入单位', '运行时名称', '运行时版本', '运行时后端', '运行时构建', '运行时变体', '插件版本', '模型格式', '模型身份状态', '模型 SHA256', '模型大小 (bytes)', '模型仓库', '模型修订 (非权重 SHA)', '应用版本', '执行拓扑', '内存观测范围', '公开设置'],
 };
 const metricLabels: Record<Locale, string[]> = {
-  en: ['First output (ms)', 'Prompt processing per request (tok/s)', 'Generation speed per request (tok/s)', 'Time per output token (ms)', 'Total token throughput (tok/s)', 'Observed output (B/s)', 'Batch duration (ms)', 'Peak process RAM (bytes)'],
-  ko: ['첫 출력 (ms)', '요청당 입력 처리 속도 (tok/s)', '요청당 생성 속도 (tok/s)', '출력 토큰당 시간 (ms)', '전체 토큰 처리량 (tok/s)', '관측 출력 (B/s)', '배치 소요 시간 (ms)', '최대 프로세스 RAM (bytes)'],
-  ja: ['最初の出力 (ms)', 'リクエストあたりの入力処理速度 (tok/s)', 'リクエストあたりの生成速度 (tok/s)', '出力トークンあたりの時間 (ms)', '全体トークン処理量 (tok/s)', '観測出力 (B/s)', 'バッチ所要時間 (ms)', '最大プロセス RAM (bytes)'],
-  zh: ['首次输出 (ms)', '每请求输入处理速度 (tok/s)', '每请求生成速度 (tok/s)', '每输出令牌时间 (ms)', '总令牌吞吐量 (tok/s)', '观测输出 (B/s)', '批次耗时 (ms)', '进程峰值 RAM (bytes)'],
+  en: ['First output (TTFT, ms)', 'Prompt processing per request (Prefill, tok/s)', 'Generation speed per request (Decode, tok/s)', 'Time per output token (TPOT, ms)', 'Total token throughput (tok/s)', 'Observed output (B/s)', 'Batch duration (E2E, ms)', 'Peak process RAM (bytes)'],
+  ko: ['첫 출력 (TTFT, ms)', '요청당 입력 처리 속도 (Prefill, tok/s)', '요청당 생성 속도 (Decode, tok/s)', '출력 토큰당 시간 (TPOT, ms)', '전체 토큰 처리량 (Throughput, tok/s)', '관측 출력 (B/s)', '배치 소요 시간 (E2E, ms)', '최대 프로세스 RAM (bytes)'],
+  ja: ['最初の出力 (TTFT, ms)', 'リクエストあたりの入力処理速度 (Prefill, tok/s)', 'リクエストあたりの生成速度 (Decode, tok/s)', '出力トークンあたりの時間 (TPOT, ms)', '全体トークン処理量 (Throughput, tok/s)', '観測出力 (B/s)', 'バッチ所要時間 (E2E, ms)', '最大プロセス RAM (bytes)'],
+  zh: ['首次输出 (TTFT, ms)', '每请求输入处理速度 (Prefill, tok/s)', '每请求生成速度 (Decode, tok/s)', '每输出令牌时间 (TPOT, ms)', '总令牌吞吐量 (Throughput, tok/s)', '观测输出 (B/s)', '批次耗时 (E2E, ms)', '进程峰值 RAM (bytes)'],
 };
 const pointLabels: Record<Locale, string[]> = {
   en: ['Input UTF8 bytes', 'Max output token request', 'Concurrency', 'Samples'],

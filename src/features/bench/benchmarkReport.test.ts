@@ -76,10 +76,10 @@ describe('benchmark report exports', () => {
   });
 
   it.each<[Locale, string[]]>([
-    ['en', ['First output (ms)', 'Prompt processing per request (tok/s)', 'Generation speed per request (tok/s)', 'Time per output token (ms)', 'Total token throughput (tok/s)', 'Observed output (B/s)', 'Batch duration (ms)', 'Peak process RAM (bytes)']],
-    ['ko', ['첫 출력 (ms)', '요청당 입력 처리 속도 (tok/s)', '요청당 생성 속도 (tok/s)', '출력 토큰당 시간 (ms)', '전체 토큰 처리량 (tok/s)', '관측 출력 (B/s)', '배치 소요 시간 (ms)', '최대 프로세스 RAM (bytes)']],
-    ['ja', ['最初の出力 (ms)', 'リクエストあたりの入力処理速度 (tok/s)', 'リクエストあたりの生成速度 (tok/s)', '出力トークンあたりの時間 (ms)', '全体トークン処理量 (tok/s)', '観測出力 (B/s)', 'バッチ所要時間 (ms)', '最大プロセス RAM (bytes)']],
-    ['zh', ['首次输出 (ms)', '每请求输入处理速度 (tok/s)', '每请求生成速度 (tok/s)', '每输出令牌时间 (ms)', '总令牌吞吐量 (tok/s)', '观测输出 (B/s)', '批次耗时 (ms)', '进程峰值 RAM (bytes)']],
+    ['en', ['First output (TTFT, ms)', 'Prompt processing per request (Prefill, tok/s)', 'Generation speed per request (Decode, tok/s)', 'Time per output token (TPOT, ms)', 'Total token throughput (tok/s)', 'Observed output (B/s)', 'Batch duration (E2E, ms)', 'Peak process RAM (bytes)']],
+    ['ko', ['첫 출력 (TTFT, ms)', '요청당 입력 처리 속도 (Prefill, tok/s)', '요청당 생성 속도 (Decode, tok/s)', '출력 토큰당 시간 (TPOT, ms)', '전체 토큰 처리량 (Throughput, tok/s)', '관측 출력 (B/s)', '배치 소요 시간 (E2E, ms)', '최대 프로세스 RAM (bytes)']],
+    ['ja', ['最初の出力 (TTFT, ms)', 'リクエストあたりの入力処理速度 (Prefill, tok/s)', 'リクエストあたりの生成速度 (Decode, tok/s)', '出力トークンあたりの時間 (TPOT, ms)', '全体トークン処理量 (Throughput, tok/s)', '観測出力 (B/s)', 'バッチ所要時間 (E2E, ms)', '最大プロセス RAM (bytes)']],
+    ['zh', ['首次输出 (TTFT, ms)', '每请求输入处理速度 (Prefill, tok/s)', '每请求生成速度 (Decode, tok/s)', '每输出令牌时间 (TPOT, ms)', '总令牌吞吐量 (Throughput, tok/s)', '观测输出 (B/s)', '批次耗时 (E2E, ms)', '进程峰值 RAM (bytes)']],
   ])('keeps %s metric labels in display order', (locale, labels) => {
     expect(benchmarkReport([servingBenchmark()], locale).columns.filter(column => column.key?.endsWith('.median'))
       .map(column => column.label.split(' · ')[0])).toEqual(labels);
@@ -108,9 +108,9 @@ describe('benchmark report exports', () => {
       'Model repository': 'Example/Recorded-model', 'Model revision (not weight SHA)': 'b'.repeat(40),
       'App version': '0.3.5', 'Execution topology': 'owned', 'Memory scope': 'owned_process_tree',
       'Input UTF8 bytes': 4096, 'Max output token request': 128, 'Samples': 3,
-      'First output (ms) · median': 20, 'First output (ms) · min': 10, 'First output (ms) · max': 30, 'First output (ms) · samples': 2,
+      'First output (TTFT, ms) · median': 20, 'First output (TTFT, ms) · min': 10, 'First output (TTFT, ms) · max': 30, 'First output (TTFT, ms) · samples': 2,
       'Observed output (B/s) · median': 20, 'Observed output (B/s) · min': 10, 'Observed output (B/s) · max': 30, 'Observed output (B/s) · samples': 2,
-      'Total token throughput (tok/s) · median': null, 'Time per output token (ms) · median': null,
+      'Total token throughput (tok/s) · median': null, 'Time per output token (TPOT, ms) · median': null,
     };
     for (const [header, value] of Object.entries(expected)) {
       const index = headers.indexOf(header);
@@ -191,5 +191,23 @@ describe('benchmark report exports', () => {
     const report = benchmarkReport([saved]);
     const labelIndex = report.columns.findIndex(column => column.key === 'recorded_model_label');
     expect(defined(report.rows[0])[labelIndex]).toBe('variants · 4bit/model.safetensors');
+  });
+
+  it('orders exported report rows by concurrency first and then input bytes', () => {
+    const record = serving([
+      trial({ id: '16k-c1', input_bytes: 16384, concurrency: 1 }),
+      trial({ id: '4k-c2', input_bytes: 4096, concurrency: 2, finish_reasons: ['stop', 'stop'], input_sha256_by_request: ['b'.repeat(64), 'c'.repeat(64)] }),
+      trial({ id: '16k-c2', input_bytes: 16384, concurrency: 2, finish_reasons: ['stop', 'stop'], input_sha256_by_request: ['d'.repeat(64), 'e'.repeat(64)] }),
+      trial({ id: '4k-c1', input_bytes: 4096, concurrency: 1 }),
+    ]);
+    const report = benchmarkReport([record]);
+    const inputIndex = report.columns.findIndex(column => column.key === 'input_bytes');
+    const concurrencyIndex = report.columns.findIndex(column => column.key === 'concurrency');
+    expect(report.rows.map(row => [row[inputIndex], row[concurrencyIndex]])).toEqual([
+      [4096, 1],
+      [16384, 1],
+      [4096, 2],
+      [16384, 2],
+    ]);
   });
 });

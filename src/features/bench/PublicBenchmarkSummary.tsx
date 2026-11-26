@@ -12,33 +12,38 @@ const numberLabel = (value: number | null | undefined, unavailable: string, digi
 
 function MetricCell({ stat, copy, memory = false }: { stat: ServingMetricStat | null; copy: Copy; memory?: boolean }) {
   if (!stat) return <td>{copy.unavailable}</td>;
-  const value = (n: number) => memory ? formatBytes(n) : numberLabel(n, copy.unavailable);
-  return <td>{value(stat.median)}<small>{value(stat.min)} – {value(stat.max)} · n={stat.samples}</small></td>;
+  return <td>{memory ? formatBytes(stat.median) : numberLabel(stat.median, copy.unavailable)}</td>;
 }
 
 /** Shared serving-point renderer: statistics are never averaged again by the UI. */
 export function ServingResultTable({ points, copy, label = copy.servingResults }: { points: readonly ServingBenchmarkPoint[]; copy: Copy; label?: string }) {
   if (!points.length) return null;
-  const metrics: Record<ServingMetricKey, readonly [string, string]> = {
-    first_output_ms: [copy.firstOutput, copy.milliseconds],
-    prefill_tokens_per_second: [copy.prefillRate, copy.tokens],
-    decode_tokens_per_second: [copy.decodeRate, copy.tokens],
-    tpot_ms: [copy.tpot, copy.milliseconds],
-    reported_tokens_per_second: [copy.reportedRate, copy.tokens],
-    output_bytes_per_second: [copy.outputRate, copy.bytesPerSecond],
-    e2e_ms: [copy.e2e, copy.milliseconds],
-    peak_memory_bytes: [copy.memory, copy.bytes],
+  const metrics: Record<ServingMetricKey, readonly [string, string, string, string]> = {
+    first_output_ms: [copy.tableFirstOutput, copy.tableFirstOutputSub, copy.milliseconds, copy.firstOutput],
+    prefill_tokens_per_second: [copy.tablePrefillRate, copy.tablePrefillRateSub, copy.tokens, copy.prefillRate],
+    decode_tokens_per_second: [copy.tableDecodeRate, copy.tableDecodeRateSub, copy.tokens, copy.decodeRate],
+    tpot_ms: [copy.tableTpot, copy.tableTpotSub, copy.milliseconds, copy.tpot],
+    reported_tokens_per_second: [copy.tableReportedRate, copy.tableReportedRateSub, copy.tokens, copy.reportedRate],
+    output_bytes_per_second: [copy.tableOutputRate, '', copy.bytesPerSecond, copy.outputRate],
+    e2e_ms: [copy.tableE2e, copy.tableE2eSub, copy.milliseconds, copy.e2e],
+    peak_memory_bytes: [copy.tableMemory, '', copy.bytes, copy.memory],
   };
   return <section className="app-card app-card--flush performance-card performance-results" aria-label={label}>
     <div className="performance-card-heading"><h3>{label}</h3></div>
     <p className="performance-hint">{copy.medianHint}</p>
     <BenchmarkTableScroll label={label} copy={copy}><table>
       <caption className="sr-only">{label}</caption>
-      <thead><tr><th scope="col">{copy.servingTest}</th><th scope="col">{copy.concurrency}</th><th scope="col">{copy.repeat}</th>
-        {SERVING_METRIC_KEYS.map(key => <th scope="col" key={key}>{metrics[key][0]}<small>{metrics[key][1]}</small></th>)}
+      <thead><tr>
+        <th scope="col" title={copy.inputBytes}>{copy.tableInput}<small>{copy.bytes}</small></th>
+        <th scope="col" title={copy.concurrency}>{copy.tableConcurrency}</th>
+        <th scope="col" title={copy.repeat}>{copy.tableSamples}</th>
+        {SERVING_METRIC_KEYS.map(key => {
+          const [heading, sub, unit, full] = metrics[key];
+          return <th scope="col" key={key} title={full}>{heading}{sub && <span className="performance-th-sub">{sub}</span>}<small>{unit}</small></th>;
+        })}
       </tr></thead>
       <tbody>{points.map(point => <tr key={`${point.input_bytes}/${point.concurrency}/${point.max_output_tokens}`}>
-        <th scope="row">{formatInputSize(point.input_bytes)} / {point.max_output_tokens.toLocaleString()}</th>
+        <th scope="row">{formatInputSize(point.input_bytes)}</th>
         <td>{point.concurrency}×</td><td>{point.samples}</td>
         {SERVING_METRIC_KEYS.map(key => <MetricCell key={key} stat={point[key]} copy={copy} memory={key === 'peak_memory_bytes'} />)}
       </tr>)}</tbody>

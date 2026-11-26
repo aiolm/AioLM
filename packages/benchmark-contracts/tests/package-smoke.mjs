@@ -387,10 +387,11 @@ try {
     assert.equal(servingMetricValues({ ...observed, reported_completion_tokens: 2 }).reported_tokens_per_second, 10);
     assert.equal(servingMetricValues({ ...observed, reported_completion_tokens: 0 }).reported_tokens_per_second, 0);
     const sorted = summarizeServingPoints([
+      { ...observed, input_bytes: 8192, concurrency: 2 },
       { ...observed, input_bytes: 8192 }, { ...observed, concurrency: 2 },
       { ...observed, max_output_tokens: 64 }, observed,
     ]);
-    assert.deepEqual(sorted.map(point => [point.input_bytes, point.concurrency, point.max_output_tokens]), [[4096, 1, 64], [4096, 1, 128], [4096, 2, 128], [8192, 1, 128]]);
+    assert.deepEqual(sorted.map(point => [point.input_bytes, point.concurrency, point.max_output_tokens]), [[4096, 1, 64], [4096, 1, 128], [8192, 1, 128], [4096, 2, 128], [8192, 2, 128]]);
     assert.equal(summarizeServingPoints([{ ...observed, e2e_ms: Number.MAX_VALUE }, { ...observed, e2e_ms: Number.MAX_VALUE }])[0].e2e_ms.median, Number.MAX_VALUE);
     const timestamp = value => assertIsoTimestamp(value);
     for (const value of [

@@ -260,7 +260,8 @@ describe('performance history and export', () => {
     expect(csv).not.toContain('"Cancelled"');
     expect(performanceMarkdown(cancelled, 'en')).toBe('');
     expect(csv).not.toMatch(/C:|private|models\/|cannot load|--api-key|run_id|effective_args|sha256/);
-    for (const line of lines.slice(1)) expect(line.match(/"(?:[^"]|"")*"/g)).toHaveLength(defined(lines[0]).split(',').length);
+    const headerColumns = defined(lines[0]).match(/"(?:[^"]|"")*"/g);
+    for (const line of lines.slice(1)) expect(line.match(/"(?:[^"]|"")*"/g)).toHaveLength(defined(headerColumns).length);
     expect(csv).not.toContain('undefined');
     expect(csv).not.toContain('NaN');
   });

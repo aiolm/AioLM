@@ -155,13 +155,13 @@ not retained in memory.
 
 | Metric | Meaning |
 | --- | --- |
-| First observed output (ms) | Mean request start to first nonempty content or reasoning byte; unavailable if any slot emits no output. |
-| Prompt processing per request (tok/s) | Mean of `1000 × reported prompt tokens / first-output ms`; each slot needs positive prompt usage and first-output time. |
-| Generation speed per request (tok/s) | Mean of `1000 / slot TPOT`; needs at least two reported completion tokens and positive post-first-output duration in every slot. |
-| Time per output token (ms) | Mean of `(request E2E − first output) / (reported completion tokens − 1)`; request E2E ends at its `[DONE]`. |
+| First observed output (TTFT, ms) | Mean request start to first nonempty content or reasoning byte; unavailable if any slot emits no output. |
+| Prompt processing per request (Prefill, tok/s) | Mean of `1000 × reported prompt tokens / first-output ms`; each slot needs positive prompt usage and first-output time. |
+| Generation speed per request (Decode, tok/s) | Mean of `1000 / slot TPOT`; needs at least two reported completion tokens and positive post-first-output duration in every slot. |
+| Time per output token (TPOT, ms) | Mean of `(request E2E − first output) / (reported completion tokens − 1)`; request E2E ends at its `[DONE]`. |
 | Total token throughput (tok/s) | Batch reported completion-token total divided by batch E2E in seconds. |
 | Output throughput (B/s) | Batch decoded UTF-8 output bytes divided by batch E2E in seconds; includes content and reasoning, not tool arguments or framing. |
-| End-to-end time (ms) | Batch start to the last request's `[DONE]`, not socket EOF. |
+| End-to-end time (E2E, ms) | Batch start to the last request's `[DONE]`, not socket EOF. |
 | Peak process RAM (bytes) | Sampled RSS of owned compute process-tree members; summed RSS may count shared pages more than once, and attached/unknown compute remains unavailable. |
 
 The three per-request token metrics need engine-reported usage and stay
