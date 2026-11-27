@@ -147,10 +147,12 @@ export default function TitleBar() {
   if (frame === undefined && isNativeRuntimeAvailable()) return <div className="app-titlebar-slot" data-pending=""><div className="app-titlebar" data-tauri-drag-region /></div>;
   if (!frame || !win || frame.chrome === "native") return null;
   const maximizeLabel = maximized ? text.restore : text.maximize;
+  const brandName = frame.identity?.productName.trim() || "AioLM";
+  const isolatedDev = frame.identity?.isolatedDev ?? false;
   // Only the bar itself carries the drag attribute: the brand ignores the
   // pointer so presses fall through to it, and the buttons stay clickable.
-  return <div className="app-titlebar-slot" ref={slot}>{createPortal(<div className="app-titlebar" data-chrome={frame.chrome} data-tauri-drag-region>
-    <div className="app-titlebar-brand"><AioMark /><span>AioLM</span></div>
+  return <div className="app-titlebar-slot" ref={slot}>{createPortal(<div className="app-titlebar" data-chrome={frame.chrome} data-isolated-dev={isolatedDev ? "" : undefined} data-tauri-drag-region>
+    <div className="app-titlebar-brand"><AioMark /><span>{brandName}</span>{isolatedDev && <span className="app-titlebar-badge">DEV</span>}</div>
     {captions && <div className="app-titlebar-controls" role="group" aria-label={text.controls}>
       <button type="button" className="app-titlebar-button" aria-label={text.minimize} title={text.minimize} onClick={() => { void win.minimize().catch(() => undefined); }}>
         <svg aria-hidden="true" viewBox="0 0 10 10" width="10" height="10"><path d="M0 5.5h10" stroke="currentColor" strokeWidth="1" /></svg>

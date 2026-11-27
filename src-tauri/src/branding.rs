@@ -329,7 +329,15 @@ pub fn copy_root(
     fs::rename(stage, target).map_err(|e| e.to_string())
 }
 
+fn should_skip_desktop_migration(identifier: &str, skip_legacy: bool) -> bool {
+    !crate::home::is_production_identifier(identifier) || skip_legacy
+}
+
+/// Prepare application data directories, skipping legacy imports when disabled.
 pub fn prepare_managed_data() -> Result<(), String> {
+    if crate::home::legacy_migration_disabled() {
+        return crate::home::prepare_isolated_home();
+    }
     let paths = managed_paths();
     for mapping in &paths {
         copy_root(
@@ -342,7 +350,11 @@ pub fn prepare_managed_data() -> Result<(), String> {
     crate::home::prepare_home()
 }
 
-pub fn prepare_desktop() -> Result<(), String> {
+/// Prepare desktop data for the given Tauri `identifier`, isolating non-production apps.
+pub fn prepare_desktop_for_identifier(identifier: &str) -> Result<(), String> {
+    if should_skip_desktop_migration(identifier, crate::home::legacy_migration_disabled()) {
+        return crate::home::prepare_isolated_home();
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -372,6 +384,11 @@ pub fn prepare_desktop() -> Result<(), String> {
         copy_root(&source, &target, &[], false)?;
     }
     prepare_managed_data()
+}
+
+/// Prepare desktop data for the production application identifier.
+pub fn prepare_desktop() -> Result<(), String> {
+    prepare_desktop_for_identifier(crate::home::PRODUCTION_APP_IDENTIFIER)
 }
 
 #[cfg(test)]
@@ -566,5 +583,16 @@ mod tests {
         assert_eq!(env_var(&new).unwrap(), "");
         std::env::remove_var(new);
         std::env::remove_var(old);
+    }
+
+    #[test]
+    fn desktop_migration_skips_non_production_identifiers_or_disabled_env() {
+        assert!(!should_skip_desktop_migration("com.aiolm.desktop", false));
+        assert!(should_skip_desktop_migration("com.aiolm.desktop", true));
+        assert!(should_skip_desktop_migration(
+            "com.aiolm.desktop.dev",
+            false
+        ));
+        assert!(should_skip_desktop_migration("com.aiolm.desktop.dev", true));
     }
 }

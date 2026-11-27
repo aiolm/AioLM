@@ -4,7 +4,7 @@ import { trackInitialRead } from "../ui/initialLayout.ts";
 import { toIpcError } from "./ipcError.ts";
 
 const layoutReads = new Set([
-  "window_chrome", "get_config", "server_status", "session_list", "list_models", "list_model_artifacts", "device_profile",
+  "window_chrome", "window_identity", "get_config", "server_status", "session_list", "list_models", "list_model_artifacts", "device_profile",
   "rt_list", "rt_latest", "rt_probe", "provider_catalog", "provider_runtimes", "provider_runtime_options", "provider_option_schema",
   "snapshot_model_name", "mcp_list_servers", "mcp_list_tools", "api_server_status", "anthropic_gateway_status",
   "hf_search_models", "hf_model_files", "hf_token_status", "hf_pending_downloads", "hf_installed_files", "hf_installed_snapshots",

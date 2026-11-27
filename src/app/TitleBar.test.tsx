@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 let native = true;
 let resized: (() => void) | undefined;
+let identity: { productName: string; isolatedDev: boolean } | undefined;
 const frameMode = vi.fn<() => Promise<"frameless" | "overlay" | "native">>();
 const nativeTheme = vi.fn<(theme: "light" | "dark" | null) => Promise<void>>(async () => undefined);
 const win = {
@@ -17,7 +18,7 @@ const win = {
 async function renderTitleBar() {
   vi.resetModules();
   vi.doMock("../shared/api/transport", () => ({ isNativeRuntimeAvailable: () => native }));
-  vi.doMock("../shared/api/desktop", () => ({ frameWindow: async () => ({ window: win, chrome: await frameMode(), setTheme: nativeTheme }) }));
+  vi.doMock("../shared/api/desktop", () => ({ frameWindow: async () => ({ window: win, chrome: await frameMode(), identity, setTheme: nativeTheme }) }));
   const { default: TitleBar } = await import("./TitleBar");
   return render(<TitleBar />);
 }
@@ -25,6 +26,7 @@ async function renderTitleBar() {
 describe("TitleBar", () => {
   beforeEach(() => {
     native = true;
+    identity = undefined;
     frameMode.mockResolvedValue("frameless");
     nativeTheme.mockResolvedValue(undefined);
     document.documentElement.dataset.theme = "light";
@@ -202,5 +204,21 @@ describe("TitleBar", () => {
     });
     await act(async () => { finishDark(); });
     await waitFor(() => expect(applied).toBe(nextMode === "system" ? null : "light"));
+  });
+
+  it("displays product name and DEV badge for isolated development builds", async () => {
+    identity = { productName: "AioLM Dev", isolatedDev: true };
+    await renderTitleBar();
+    expect(await screen.findByText("AioLM Dev")).toBeInTheDocument();
+    expect(screen.getByText("DEV")).toBeInTheDocument();
+    expect(document.querySelector(".app-titlebar")).toHaveAttribute("data-isolated-dev", "");
+  });
+
+  it("keeps production branding without DEV badge when not isolated", async () => {
+    identity = { productName: "AioLM", isolatedDev: false };
+    await renderTitleBar();
+    expect(await screen.findByText("AioLM")).toBeInTheDocument();
+    expect(screen.queryByText("DEV")).not.toBeInTheDocument();
+    expect(document.querySelector(".app-titlebar")).not.toHaveAttribute("data-isolated-dev");
   });
 });

@@ -52,8 +52,30 @@ pub(crate) async fn save_config(
     })
 }
 
+fn should_skip_migration_paths(identifier: &str, skip_legacy: bool) -> bool {
+    !crate::home::is_production_identifier(identifier) || skip_legacy
+}
+
+fn isolated_launch_at_login_result(enabled: bool) -> Result<bool, AppError> {
+    if enabled {
+        Err(AppError::unavailable(
+            "Launch at login is disabled in isolated development builds.",
+        ))
+    } else {
+        Ok(false)
+    }
+}
+
 #[tauri::command]
-pub(crate) fn migration_paths() -> Result<Vec<branding::MigratedPath>, AppError> {
+pub(crate) fn migration_paths(
+    app: tauri::AppHandle,
+) -> Result<Vec<branding::MigratedPath>, AppError> {
+    if should_skip_migration_paths(
+        &app.config().identifier,
+        crate::home::legacy_migration_disabled(),
+    ) {
+        return Ok(Vec::new());
+    }
     Ok(branding::managed_paths())
 }
 
@@ -62,6 +84,9 @@ pub(crate) fn migration_paths() -> Result<Vec<branding::MigratedPath>, AppError>
 /// so turning the entry off in the OS startup list is reflected here.
 #[tauri::command]
 pub(crate) fn launch_at_login(app: tauri::AppHandle) -> Result<bool, AppError> {
+    if !crate::home::is_production_identifier(&app.config().identifier) {
+        return Ok(false);
+    }
     app.autolaunch().is_enabled().map_err(|error| {
         AppError::unavailable(format!("failed to read the startup registration: {error}"))
     })
@@ -71,6 +96,9 @@ pub(crate) fn launch_at_login(app: tauri::AppHandle) -> Result<bool, AppError> {
 /// effect.
 #[tauri::command]
 pub(crate) fn set_launch_at_login(app: tauri::AppHandle, enabled: bool) -> Result<bool, AppError> {
+    if !crate::home::is_production_identifier(&app.config().identifier) {
+        return isolated_launch_at_login_result(enabled);
+    }
     let launcher = app.autolaunch();
     if enabled {
         launcher.enable()
@@ -96,4 +124,26 @@ pub(crate) fn sync_tray_state(
 ) -> Result<(), AppError> {
     crate::tray::update_presentation(&app, &locale, &model_state, model_name.as_deref())
         .map_err(AppError::unavailable)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::ErrorKind;
+
+    #[test]
+    fn migration_paths_are_skipped_for_isolated_identifiers_or_disabled_env() {
+        assert!(!should_skip_migration_paths("com.aiolm.desktop", false));
+        assert!(should_skip_migration_paths("com.aiolm.desktop", true));
+        assert!(should_skip_migration_paths("com.aiolm.desktop.dev", false));
+        assert!(should_skip_migration_paths("com.aiolm.desktop.dev", true));
+    }
+
+    #[test]
+    fn isolated_launch_at_login_rejects_enable_and_keeps_disable_off() {
+        assert!(!isolated_launch_at_login_result(false).unwrap());
+        let error = isolated_launch_at_login_result(true).unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Unavailable);
+        assert!(error.message.contains("isolated development builds"));
+    }
 }

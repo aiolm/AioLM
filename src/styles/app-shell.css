@@ -205,8 +205,10 @@
 .app-titlebar-host { position: fixed; inset: 0 0 auto; height: 32px; z-index: 100; }
 .app-titlebar { display: flex; align-items: stretch; flex: 0 0 32px; height: 32px; min-width: 0; border-bottom: 1px solid var(--ui-border); background: var(--ui-surface); color: var(--ui-ink); user-select: none; -webkit-user-select: none; }
 .app-titlebar[data-chrome="overlay"] { justify-content: center; padding-inline: 80px; }
+.app-titlebar[data-isolated-dev] { border-bottom-color: var(--tone-warning-ink); }
 .app-titlebar-brand { display: flex; align-items: center; gap: 8px; min-width: 0; padding-inline: 12px; color: var(--ui-muted); font-size: var(--ui-text-support); font-weight: 650; line-height: 1; letter-spacing: -.01em; pointer-events: none; }
 .app-titlebar-brand span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.app-titlebar-brand .app-titlebar-badge { flex: 0 0 auto; overflow: visible; padding: 2px 6px; border-radius: 999px; background: var(--tone-warning-bg); color: var(--tone-warning-ink); font-size: 10px; font-weight: 700; letter-spacing: .04em; line-height: 1.2; }
 .app-titlebar-brand .aiolm-mark { width: 16px; height: 16px; }
 .app-titlebar-controls { display: flex; flex: 0 0 auto; margin-inline-start: auto; }
 .app-titlebar-button { display: grid; place-items: center; width: 46px; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--ui-muted); }
@@ -217,5 +219,6 @@
 .app-titlebar-button--close:active { background: var(--tone-error-action-fill-hover); color: var(--tone-error-action-ink); }
 @media (forced-colors: active) {
   .app-titlebar { border-bottom: 1px solid CanvasText; }
+  .app-titlebar-brand .app-titlebar-badge { border: 1px solid CanvasText; }
   .app-titlebar-button:is(:hover, :active, :focus-visible), .app-titlebar-button--close:is(:hover, :active, :focus-visible) { background: Highlight; color: HighlightText; forced-color-adjust: none; }
 }

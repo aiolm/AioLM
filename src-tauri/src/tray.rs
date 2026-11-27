@@ -42,8 +42,8 @@ fn tray_state() -> &'static Mutex<TrayPresentation> {
 }
 
 struct TrayStrings {
-    show: &'static str,
-    quit: &'static str,
+    show: String,
+    quit: String,
     stop_model: &'static str,
     status_idle: &'static str,
     status_starting: &'static str,
@@ -51,11 +51,21 @@ struct TrayStrings {
     status_running_prefix: &'static str,
 }
 
-fn tray_strings(locale: &str) -> TrayStrings {
+fn app_display_name<R: Runtime>(app: &AppHandle<R>) -> String {
+    app.config()
+        .product_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("AioLM")
+        .to_owned()
+}
+
+fn tray_strings(locale: &str, app_name: &str) -> TrayStrings {
     match locale {
         "ko" => TrayStrings {
-            show: "AioLM 열기",
-            quit: "AioLM 종료",
+            show: format!("{app_name} 열기"),
+            quit: format!("{app_name} 종료"),
             stop_model: "모델 중지",
             status_idle: "실행 중인 모델 없음",
             status_starting: "모델 시작 중…",
@@ -63,8 +73,8 @@ fn tray_strings(locale: &str) -> TrayStrings {
             status_running_prefix: "실행 중",
         },
         "ja" => TrayStrings {
-            show: "AioLM を表示",
-            quit: "AioLM を終了",
+            show: format!("{app_name} を表示"),
+            quit: format!("{app_name} を終了"),
             stop_model: "モデルを停止",
             status_idle: "実行中のモデルなし",
             status_starting: "モデルを起動中…",
@@ -72,8 +82,8 @@ fn tray_strings(locale: &str) -> TrayStrings {
             status_running_prefix: "実行中",
         },
         "zh" => TrayStrings {
-            show: "显示 AioLM",
-            quit: "退出 AioLM",
+            show: format!("显示 {app_name}"),
+            quit: format!("退出 {app_name}"),
             stop_model: "停止模型",
             status_idle: "无运行中的模型",
             status_starting: "正在启动模型…",
@@ -81,8 +91,8 @@ fn tray_strings(locale: &str) -> TrayStrings {
             status_running_prefix: "运行中",
         },
         _ => TrayStrings {
-            show: "Show AioLM",
-            quit: "Quit AioLM",
+            show: format!("Show {app_name}"),
+            quit: format!("Quit {app_name}"),
             stop_model: "Stop model",
             status_idle: "No model running",
             status_starting: "Starting model…",
@@ -103,8 +113,8 @@ fn compact_model_label(name: &str) -> String {
     }
 }
 
-fn format_status_line(state: &TrayPresentation) -> (String, String, bool) {
-    let strings = tray_strings(&state.locale);
+fn format_status_line(state: &TrayPresentation, app_name: &str) -> (String, String, bool) {
+    let strings = tray_strings(&state.locale, app_name);
     match state.model_state.as_str() {
         "running" => {
             let status = match state.model_name.as_deref().map(compact_model_label) {
@@ -113,20 +123,20 @@ fn format_status_line(state: &TrayPresentation) -> (String, String, bool) {
                 }
                 _ => strings.status_running_prefix.to_owned(),
             };
-            let tooltip = format!("AioLM — {status}");
+            let tooltip = format!("{app_name} — {status}");
             (status, tooltip, true)
         }
         "starting" => (
             strings.status_starting.to_owned(),
-            format!("AioLM — {}", strings.status_starting),
+            format!("{app_name} — {}", strings.status_starting),
             true,
         ),
         "stopping" => (
             strings.status_stopping.to_owned(),
-            format!("AioLM — {}", strings.status_stopping),
+            format!("{app_name} — {}", strings.status_stopping),
             false,
         ),
-        _ => (strings.status_idle.to_owned(), "AioLM".to_owned(), false),
+        _ => (strings.status_idle.to_owned(), app_name.to_owned(), false),
     }
 }
 
@@ -134,8 +144,9 @@ fn build_menu<R: Runtime>(
     app: &AppHandle<R>,
     state: &TrayPresentation,
 ) -> Result<(Menu<R>, String), String> {
-    let strings = tray_strings(&state.locale);
-    let (status_label, tooltip, can_stop) = format_status_line(state);
+    let app_name = app_display_name(app);
+    let strings = tray_strings(&state.locale, &app_name);
+    let (status_label, tooltip, can_stop) = format_status_line(state, &app_name);
     let status = MenuItem::with_id(app, STATUS_ITEM, status_label, false, None::<&str>)
         .map_err(|error| format!("failed to build the tray menu: {error}"))?;
     let sep1 = PredefinedMenuItem::separator(app)
@@ -356,18 +367,18 @@ mod unit_tests {
 
     #[test]
     fn tray_strings_cover_four_locales_with_english_fallback() {
-        assert_eq!(tray_strings("en").show, "Show AioLM");
-        assert_eq!(tray_strings("ko").show, "AioLM 열기");
-        assert_eq!(tray_strings("ja").show, "AioLM を表示");
-        assert_eq!(tray_strings("zh").show, "显示 AioLM");
-        assert_eq!(tray_strings("fr").quit, "Quit AioLM");
+        assert_eq!(tray_strings("en", "AioLM").show, "Show AioLM");
+        assert_eq!(tray_strings("ko", "AioLM").show, "AioLM 열기");
+        assert_eq!(tray_strings("ja", "AioLM").show, "AioLM を表示");
+        assert_eq!(tray_strings("zh", "AioLM").show, "显示 AioLM");
+        assert_eq!(tray_strings("fr", "AioLM").quit, "Quit AioLM");
     }
 
     #[test]
     fn tray_status_line_formats_states_and_bounds_long_names() {
         let idle = TrayPresentation::default();
         assert_eq!(
-            format_status_line(&idle),
+            format_status_line(&idle, "AioLM"),
             ("No model running".to_owned(), "AioLM".to_owned(), false)
         );
         let long_name = "x".repeat(80);
@@ -376,10 +387,44 @@ mod unit_tests {
             model_state: "running".to_owned(),
             model_name: Some(long_name),
         };
-        let (status, tooltip, can_stop) = format_status_line(&running);
+        let (status, tooltip, can_stop) = format_status_line(&running, "AioLM");
         assert!(status.starts_with("실행 중: "));
         assert!(status.ends_with('…'));
         assert!(tooltip.starts_with("AioLM — 실행 중: "));
+        assert!(can_stop);
+    }
+
+    #[test]
+    fn tray_labels_and_tooltips_reflect_custom_product_name() {
+        assert_eq!(tray_strings("en", "AioLM Dev").show, "Show AioLM Dev");
+        assert_eq!(tray_strings("en", "AioLM Dev").quit, "Quit AioLM Dev");
+        assert_eq!(tray_strings("ko", "AioLM Dev").show, "AioLM Dev 열기");
+        assert_eq!(tray_strings("ko", "AioLM Dev").quit, "AioLM Dev 종료");
+        assert_eq!(tray_strings("ja", "AioLM Dev").show, "AioLM Dev を表示");
+        assert_eq!(tray_strings("ja", "AioLM Dev").quit, "AioLM Dev を終了");
+        assert_eq!(tray_strings("zh", "AioLM Dev").show, "显示 AioLM Dev");
+        assert_eq!(tray_strings("zh", "AioLM Dev").quit, "退出 AioLM Dev");
+
+        let idle = TrayPresentation::default();
+        assert_eq!(
+            format_status_line(&idle, "AioLM Dev"),
+            ("No model running".to_owned(), "AioLM Dev".to_owned(), false)
+        );
+        let starting = TrayPresentation {
+            locale: "en".to_owned(),
+            model_state: "starting".to_owned(),
+            model_name: None,
+        };
+        let (_, starting_tooltip, _) = format_status_line(&starting, "AioLM Dev");
+        assert_eq!(starting_tooltip, "AioLM Dev — Starting model…");
+
+        let running = TrayPresentation {
+            locale: "en".to_owned(),
+            model_state: "running".to_owned(),
+            model_name: Some("qwen.gguf".to_owned()),
+        };
+        let (_, running_tooltip, can_stop) = format_status_line(&running, "AioLM Dev");
+        assert_eq!(running_tooltip, "AioLM Dev — Running: qwen.gguf");
         assert!(can_stop);
     }
 }

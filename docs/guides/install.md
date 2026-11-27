@@ -155,6 +155,28 @@ sudo apt install libwebkit2gtk-4.1-dev build-essential pkg-config libxdo-dev lib
   libayatana-appindicator3-dev librsvg2-dev patchelf desktop-file-utils
 ```
 
+### Run an isolated development instance
+
+To run AioLM from source alongside a daily-use installed copy without sharing its single-instance lock, WebView profile, or data folder:
+
+```bash
+npm run tauri:dev
+```
+
+`npm run tauri:dev` (and `npm run tauri -- dev`) applies `src-tauri/tauri.dev.conf.json` (`com.aiolm.desktop.dev` / `AioLM Dev`), defaults `AIOLM_HOME` to `tmp/dev-home`, sets `AIOLM_SKIP_LEGACY_MIGRATION=1` so earlier desktop/WebView folders are not imported, sets `AIOLM_BENCHMARK_API_URL=off` to prevent publishing to the public benchmark service, and disables login-startup (`launch_at_login`) modifications.
+
+You can override any of those defaults per run:
+
+- Set `AIOLM_HOME` to a different absolute path to use another isolated data folder.
+- Set `AIOLM_BENCHMARK_API_URL` (for example to a local test server) if testing benchmark sharing.
+- Pass `--config <path>` (or `-c <path>`) to use a custom Tauri configuration override instead of `src-tauri/tauri.dev.conf.json`.
+
+Keep these shared surfaces in mind when both instances run together:
+
+- **Local API port:** if your installed AioLM already listens on the default port `8080`, change the development instance's API port in Settings before starting its API server.
+- **Shared `~/.agents`:** while `AIOLM_HOME` isolates AioLM's own `AGENTS.md` and `skills/`, `~/.agents` is still read from your OS user home directory.
+- **Test models:** keep a separate small test-model directory in the development instance instead of pointing `models_dir` at production models if you plan to test deletion or update flows.
+
 ### Build installers
 
 ```bash

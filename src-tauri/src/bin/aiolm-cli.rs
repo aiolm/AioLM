@@ -124,16 +124,31 @@ fn state_path() -> PathBuf {
         .join("headless-state.json")
 }
 
-/// The current location, followed by where releases before the `.aiolm` data
-/// folder kept the state. A server such a release started keeps running
-/// across the upgrade and must still be found, reported and stopped.
-fn state_paths() -> Vec<PathBuf> {
-    let previous = env::var_os("LOCALAPPDATA").map(|root| {
+fn state_paths_for(
+    current: PathBuf,
+    local_app_data: Option<std::ffi::OsString>,
+    skip_legacy: bool,
+) -> Vec<PathBuf> {
+    if skip_legacy {
+        return vec![current];
+    }
+    let previous = local_app_data.filter(|root| !root.is_empty()).map(|root| {
         PathBuf::from(root)
             .join("aiolm")
             .join("headless-state.json")
     });
-    std::iter::once(state_path()).chain(previous).collect()
+    std::iter::once(current).chain(previous).collect()
+}
+
+/// The current location, followed by where releases before the `.aiolm` data
+/// folder kept the state. A server such a release started keeps running
+/// across the upgrade and must still be found, reported and stopped.
+fn state_paths() -> Vec<PathBuf> {
+    state_paths_for(
+        state_path(),
+        env::var_os("LOCALAPPDATA"),
+        aiolm_lib::home::legacy_migration_disabled(),
+    )
 }
 
 fn read_state() -> Result<Option<HeadlessState>, String> {
@@ -2859,5 +2874,30 @@ mod tests {
         fs::write(&current, serde_json::to_vec(&state(9)).unwrap()).unwrap();
         assert_eq!(read_first_state(&paths).unwrap().unwrap().pid, 9);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn isolated_cli_state_paths_omit_legacy_fallback_when_skipped() {
+        let current = PathBuf::from("dev-home")
+            .join("cli")
+            .join("headless-state.json");
+        let local = Some(std::ffi::OsString::from("local-app-data"));
+        assert_eq!(
+            state_paths_for(current.clone(), local.clone(), true),
+            vec![current.clone()]
+        );
+        assert_eq!(
+            state_paths_for(current.clone(), local, false),
+            vec![
+                current.clone(),
+                PathBuf::from("local-app-data")
+                    .join("aiolm")
+                    .join("headless-state.json")
+            ]
+        );
+        assert_eq!(
+            state_paths_for(current.clone(), Some(std::ffi::OsString::new()), false),
+            vec![current]
+        );
     }
 }

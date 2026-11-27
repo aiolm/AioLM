@@ -11,10 +11,37 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 const MCP_FILE: &str = "mcp-servers.json";
-/// Tauri identifier whose application folders earlier releases used.
-const APP_IDENTIFIER: &str = "com.aiolm.desktop";
+/// Tauri identifier whose application folders production releases use.
+pub const PRODUCTION_APP_IDENTIFIER: &str = "com.aiolm.desktop";
 /// Tauri identifier of the application AioLM replaced.
 const REPLACED_APP_IDENTIFIER: &str = "com.llamaboard.desktop";
+
+/// Whether `identifier` matches the production desktop application.
+pub fn is_production_identifier(identifier: &str) -> bool {
+    identifier == PRODUCTION_APP_IDENTIFIER
+}
+
+fn parse_skip_legacy_migration(value: Option<&std::ffi::OsStr>) -> bool {
+    value
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .is_some_and(|value| {
+            value.eq_ignore_ascii_case("1")
+                || value.eq_ignore_ascii_case("true")
+                || value.eq_ignore_ascii_case("yes")
+        })
+}
+
+/// Whether startup migration from earlier AioLM or replaced-app folders is disabled.
+pub fn legacy_migration_disabled() -> bool {
+    parse_skip_legacy_migration(std::env::var_os("AIOLM_SKIP_LEGACY_MIGRATION").as_deref())
+}
+
+/// Resolve and create `AIOLM_HOME` without importing any legacy data.
+pub fn prepare_isolated_home() -> Result<(), String> {
+    let home = resolve_aiolm_home()?;
+    create_home(&home)
+}
 
 /// The data folder, or why there is no usable one. Startup checks this before
 /// any data is read or written (`prepare_home`), so a relative `AIOLM_HOME` or a
@@ -108,8 +135,8 @@ impl PreviousLayout {
             config: config.join("aiolm"),
             data: data.join("aiolm"),
             local: local.map(|local| local.join("aiolm")),
-            app_config: config.join(APP_IDENTIFIER),
-            app_data: data.join(APP_IDENTIFIER),
+            app_config: config.join(PRODUCTION_APP_IDENTIFIER),
+            app_data: data.join(PRODUCTION_APP_IDENTIFIER),
             replaced_app_config: config.join(REPLACED_APP_IDENTIFIER),
         }
     }
@@ -133,6 +160,9 @@ enum Transfer {
 pub fn prepare_home() -> Result<(), String> {
     let home = resolve_aiolm_home()?;
     create_home(&home)?;
+    if legacy_migration_disabled() {
+        return Ok(());
+    }
     match PreviousLayout::current() {
         Some(previous) => migrate(&home, &previous),
         None => Ok(()),
@@ -535,6 +565,54 @@ mod tests {
             "complete"
         );
         assert!(!home.join(".benchmarks.migration-v1").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn production_identifier_and_skip_flag_helpers_distinguish_isolated_runs() {
+        assert!(is_production_identifier("com.aiolm.desktop"));
+        assert!(!is_production_identifier("com.aiolm.desktop.dev"));
+        assert!(!is_production_identifier(""));
+
+        for truthy in ["1", "true", "TRUE", " yes ", "Yes"] {
+            assert!(parse_skip_legacy_migration(Some(std::ffi::OsStr::new(
+                truthy
+            ))));
+        }
+        for falsy in ["", "0", "false", "no", "invalid"] {
+            assert!(!parse_skip_legacy_migration(Some(std::ffi::OsStr::new(
+                falsy
+            ))));
+        }
+        assert!(!parse_skip_legacy_migration(None));
+    }
+
+    #[test]
+    fn isolated_home_creation_leaves_populated_legacy_folders_untouched() {
+        let root = fixture();
+        let previous = layout(&root);
+        write(&previous.config.join("config.json"), "{\"port\":8080}");
+        write(
+            &previous
+                .data
+                .join("runtimes")
+                .join("b1-cpu")
+                .join("llama-server.exe"),
+            "binary",
+        );
+        let isolated = root.join("dev-home");
+
+        create_home(&isolated).unwrap();
+
+        assert!(isolated.is_dir());
+        assert_eq!(fs::read_dir(&isolated).unwrap().count(), 0);
+        assert!(previous.config.join("config.json").is_file());
+        assert!(previous
+            .data
+            .join("runtimes")
+            .join("b1-cpu")
+            .join("llama-server.exe")
+            .is_file());
         fs::remove_dir_all(root).unwrap();
     }
 }

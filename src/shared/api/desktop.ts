@@ -6,8 +6,14 @@ export const migrationPaths = (): Promise<MigratedPath[]> => invoke<MigratedPath
 export type WindowChrome = 'frameless' | 'overlay' | 'native';
 export type WindowTheme = 'light' | 'dark' | null;
 
+export interface WindowIdentity {
+  productName: string;
+  isolatedDev: boolean;
+}
+
 export interface FrameWindow {
   chrome: WindowChrome;
+  identity?: WindowIdentity;
   window: {
     isMaximized(): Promise<boolean>;
     onResized(callback: () => void): Promise<UnlistenFn>;
@@ -19,10 +25,14 @@ export interface FrameWindow {
 }
 
 export async function frameWindow(): Promise<FrameWindow> {
-  const chrome = await invoke<WindowChrome>('window_chrome');
+  const [chrome, identity] = await Promise.all([
+    invoke<WindowChrome>('window_chrome'),
+    invoke<WindowIdentity>('window_identity').catch(() => undefined),
+  ]);
   const window = getCurrentWindow();
   return {
     chrome,
+    identity,
     window: {
       isMaximized: () => withNativeRuntime(() => window.isMaximized()),
       onResized: callback => withNativeRuntime(() => window.onResized(callback)),

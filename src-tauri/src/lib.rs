@@ -86,6 +86,29 @@ fn window_chrome(window: tauri::WebviewWindow) -> Result<&'static str, String> {
     Ok("native")
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WindowIdentity {
+    product_name: String,
+    isolated_dev: bool,
+}
+
+#[tauri::command]
+fn window_identity(app: tauri::AppHandle) -> WindowIdentity {
+    let config = app.config();
+    let product_name = config
+        .product_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("AioLM")
+        .to_owned();
+    WindowIdentity {
+        product_name,
+        isolated_dev: !home::is_production_identifier(&config.identifier),
+    }
+}
+
 /// Stop every managed child process and cancel background work, synchronously.
 ///
 /// This is the same cleanup the exit handler runs, minus the `exiting` flag,
@@ -211,6 +234,7 @@ pub fn run() {
         .on_window_event(attachment_drop::on_window_event)
         .invoke_handler(tauri::generate_handler![
             window_chrome,
+            window_identity,
             window_appearance::window_theme,
             commands::notifications::send_desktop_notification,
             commands::providers::provider_catalog,
@@ -421,7 +445,7 @@ pub fn run() {
     // prepare user data; otherwise another launch could stop at a migration
     // error instead of restoring it. Tauri creates the webview in `run`, so
     // this still completes before WebView2 can open the profile being copied.
-    while let Err(error) = branding::prepare_desktop() {
+    while let Err(error) = branding::prepare_desktop_for_identifier(&app.config().identifier) {
         let retry = rfd::MessageDialog::new()
             .set_title("AioLM — Data migration")
             .set_description(format!("{error}\n\nYour original data has been preserved. Resolve the problem and select OK to retry, or Cancel to exit."))
